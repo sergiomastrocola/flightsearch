@@ -1,8 +1,8 @@
-# flisearch
+# flightsearch
 
 > Find cheap flights via Google Flights — built on [`fli`](https://github.com/punitarani/fli)
 
-**flisearch** is a Python command-line tool that searches Google Flights for the cheapest fares across configurable origins, destinations, date ranges, cabin classes, and trip types. It can scan ~80 European destinations automatically, or target any specific airport in the world.
+**flightsearch** is a Python command-line tool that searches Google Flights for the cheapest fares across configurable origins, destinations, date ranges, cabin classes, and trip types. It can scan ~80 European destinations automatically, or target any specific airport in the world.
 
 ---
 
@@ -120,8 +120,8 @@ This tool queries Google Flights indirectly via the `fli` library. Prices are in
 
 ```bash
 # 1. Clona il repository
-git clone https://github.com/YOUR_USERNAME/flisearch.git
-cd flisearch
+git clone https://github.com/sergiomastrcola/flightsearch.git
+cd flightsearch
 
 # 2. Crea un ambiente virtuale
 python3 -m venv venv

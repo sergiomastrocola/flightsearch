@@ -1,0 +1,11 @@
+Total (EUR),Mode,Cabin,Label,Dep Date,Ret Date,Origin,Destination,Return Airport,Airline Out,Flight Out,Dep Out,Arr Out,Price Out (EUR),Airline Ret,Flight Ret,Dep Ret,Arr Ret,Price Ret (EUR),Warning
+1126,roundtrip,Economy,3n Wed→Sat,2026-06-03,2026-06-06,MXP,HKG,MXP,Oman Air,144,21:50,06:25,563,Cathay Pacific,617,22:15,00:10,563,
+1138,roundtrip,Economy,3n Fri→Mon,2026-06-05,2026-06-08,MXP,HKG,MXP,Hainan Airlines,428,12:35,05:00,569,Hong Kong Airlines,496,20:55,23:30,569,
+1330,roundtrip,Economy,3n Tue→Fri,2026-06-02,2026-06-05,MXP,HKG,MXP,Hainan Airlines,428,12:35,05:00,665,Etihad Airways,871,20:10,00:25,665,
+1382,roundtrip,Economy,3n Thu→Sun,2026-06-04,2026-06-07,MXP,HKG,MXP,Etihad Airways,82,11:40,19:40,691,Etihad Airways,871,20:10,00:25,691,
+1382,roundtrip,Economy,3n Mon→Thu,2026-06-08,2026-06-11,MXP,HKG,MXP,Etihad Airways,82,11:40,19:40,691,Etihad Airways,871,20:10,00:25,691,
+1432,roundtrip,Economy,3n Sat→Tue,2026-06-06,2026-06-09,MXP,HKG,MXP,Etihad Airways,82,11:40,19:40,716,Etihad Airways,871,20:10,00:25,716,
+1440,roundtrip,Economy,3n Tue→Fri,2026-06-09,2026-06-12,MXP,HKG,MXP,Etihad Airways,82,11:40,19:40,720,Etihad Airways,871,20:10,00:25,720,
+1512,roundtrip,Economy,3n Wed→Sat,2026-06-10,2026-06-13,MXP,HKG,MXP,Etihad Airways,82,11:40,19:40,756,Qatar Airways,817,18:15,21:20,756,
+1588,roundtrip,Economy,3n Mon→Thu,2026-06-01,2026-06-04,MXP,HKG,MXP,Turkish Airlines,1878,06:50,10:50,794,Turkish Airlines,171,09:20,15:45,794,
+1588,roundtrip,Economy,3n Sun→Wed,2026-06-07,2026-06-10,MXP,HKG,MXP,Turkish Airlines,1878,06:50,10:50,794,Turkish Airlines,171,08:55,15:20,794,
