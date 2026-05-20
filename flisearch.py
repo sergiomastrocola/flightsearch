@@ -429,6 +429,13 @@ def main():
                                      DEFAULT_NIGHTS_MIN, DEFAULT_NIGHTS_MAX,
                                      args.dep_days, args.time_out, args.time_ret)
 
+    elif mode in ("roundtrip", "combined") and not args.nights and not args.dep_days:
+        # No --nights specified with roundtrip/combined: treat --from as departure
+        # date and --to as return date — single fixed pair.
+        nights = (date_to - date_from).days
+        label = f"{nights}n {date_from.strftime('%a')}→{date_to.strftime('%a')}"
+        all_pairs = [(date_from, date_to, args.time_out, args.time_ret, label)]
+
     else:
         # Default weekend schemes
         all_pairs = []
@@ -508,12 +515,10 @@ def main():
                         r = format_flight(ret_flight)
                         if not o or not r:
                             continue
-                        p_out = o["price"] or 0
-                        p_ret = r["price"] or 0
-                        # Combined RT price: if both legs carry a price use sum,
-                        # otherwise take whichever is set (some carriers put full
-                        # price on the outbound leg only)
-                        total = p_out + p_ret if (p_out and p_ret) else (p_out or p_ret)
+                        # In a native round-trip the full combined price is
+                        # always on the outbound leg. The return leg price is 0 or
+                        # a duplicate — never sum them.
+                        total = o["price"] or 0
                         if max_eur and total > max_eur:
                             continue
                         entry = {
