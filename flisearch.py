@@ -28,12 +28,17 @@ Examples:
 
   # One-way only, max 50 EUR
   python flisearch.py --dest BCN --mode oneway --max 50 --from 2026-07-01 --to 2026-07-31
+
+  # Use more parallel workers for faster scanning (careful: may trigger rate limits)
+  python flisearch.py --workers 8
 """
 
 import csv
 import time
 import argparse
+import threading
 from datetime import date, timedelta, datetime
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from fli.models import (
     Airport, PassengerInfo, SeatType, MaxStops, SortBy, TripType,
     FlightSearchFilters, FlightSegment, TimeRestrictions,
@@ -43,14 +48,14 @@ from fli.search import SearchFlights
 # ══════════════════════════════════════════════════════════════
 #  DEFAULTS — edit here or override via CLI flags
 # ══════════════════════════════════════════════════════════════
-DEFAULT_ORIGINS   = ["BGY", "MXP", "LIN"]
-DEFAULT_DATE_FROM = "2026-07-01"
-DEFAULT_DATE_TO   = "2026-09-30"
-DEFAULT_MAX_EUR   = 60
+DEFAULT_ORIGINS    = ["BGY", "MXP", "LIN"]
 DEFAULT_NIGHTS_MIN = 2
 DEFAULT_NIGHTS_MAX = 3
-DEFAULT_CABIN     = "economy"
-DEFAULT_MODE      = "combined"
+DEFAULT_DATE_FROM  = "2026-07-01"
+DEFAULT_DATE_TO    = "2026-09-30"
+DEFAULT_CABIN      = "economy"
+DEFAULT_MODE       = "combined"
+DEFAULT_WORKERS    = 4   # parallel HTTP threads; raise carefully to avoid rate limits
 
 CABIN_MAP = {
     "economy":         SeatType.ECONOMY,
@@ -115,97 +120,116 @@ DEFAULT_DESTINATIONS = [
 ]
 
 # ══════════════════════════════════════════════════════════════
+#  Thread-safe helpers
+# ══════════════════════════════════════════════════════════════
+
+# Cache for one-way searches: (origin, dest, date, time_window, seat_type) → results
+_cache: dict = {}
+_cache_lock = threading.Lock()
+
+# Print lock to avoid interleaved output from multiple threads
+_print_lock = threading.Lock()
+
+def tprint(*args, **kwargs):
+    """Thread-safe print."""
+    with _print_lock:
+        print(*args, **kwargs)
 
 
-def parse_args():
-    p = argparse.ArgumentParser(
-        description="flisearch — Find cheap flights via Google Flights",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog=__doc__,
-    )
+def cached_search_one_way(origin, dest, travel_date, time_window, seat_type):
+    """
+    One-way search with in-memory cache.
+    Identical (origin, dest, date, window, cabin) calls within the same run
+    are served from cache — avoids redundant HTTP requests when the same
+    outbound date appears across multiple night-length combinations.
+    """
+    key = (origin, dest, travel_date, time_window, seat_type)
+    with _cache_lock:
+        if key in _cache:
+            return _cache[key]
 
-    # Origins / destinations
-    p.add_argument(
-        "--origins", nargs="+", default=DEFAULT_ORIGINS, metavar="IATA",
-        help=f"Departure airport(s) as IATA codes (default: {' '.join(DEFAULT_ORIGINS)})",
-    )
-    p.add_argument(
-        "--dest", nargs="+", default=None, metavar="IATA",
-        help="Specific destination(s) e.g. --dest BCN LIS. "
-             "If omitted, searches ~80 European destinations.",
-    )
+    result = _search_one_way_http(origin, dest, travel_date, time_window, seat_type)
 
-    # Date range
-    p.add_argument(
-        "--from", dest="date_from", default=DEFAULT_DATE_FROM, metavar="YYYY-MM-DD",
-        help=f"Start of search period (default: {DEFAULT_DATE_FROM})",
-    )
-    p.add_argument(
-        "--to", dest="date_to", default=DEFAULT_DATE_TO, metavar="YYYY-MM-DD",
-        help=f"End of search period (default: {DEFAULT_DATE_TO})",
-    )
+    with _cache_lock:
+        _cache[key] = result
+    return result
 
-    # Trip duration
-    p.add_argument(
-        "--nights", nargs=2, type=int, default=None, metavar=("MIN", "MAX"),
-        help="Min and max nights away e.g. --nights 5 14. Max supported: 21. "
-             "Default: 2-3 (weekend schemes).",
-    )
-    p.add_argument(
-        "--dep-days", nargs="+", type=int, default=None, metavar="N",
-        help="Departure weekdays: 0=Mon 1=Tue 2=Wed 3=Thu 4=Fri 5=Sat 6=Sun. "
-             "Default depends on mode (3 4 for combined/roundtrip, all days for oneway).",
-    )
 
-    # Time windows
-    p.add_argument(
-        "--time-out", default=None, metavar="HH-HH",
-        help="Outbound departure time window e.g. 18-23. Default: no filter.",
-    )
-    p.add_argument(
-        "--time-ret", default=None, metavar="HH-HH",
-        help="Return departure time window e.g. 8-23. Default: no filter.",
-    )
+def _search_one_way_http(origin, dest, travel_date, time_window, seat_type):
+    """Raw HTTP call for a single one-way flight."""
+    try:
+        seg_kwargs = dict(
+            departure_airport=[[origin, 0]],
+            arrival_airport=[[dest, 0]],
+            travel_date=travel_date.strftime("%Y-%m-%d"),
+        )
+        tr = parse_time_window(time_window)
+        if tr:
+            seg_kwargs["time_restrictions"] = tr
+        filters = FlightSearchFilters(
+            passenger_info=PassengerInfo(adults=1),
+            flight_segments=[FlightSegment(**seg_kwargs)],
+            seat_type=seat_type,
+            stops=MaxStops.ANY,
+            sort_by=SortBy.CHEAPEST,
+            trip_type=TripType.ONE_WAY,
+        )
+        return SearchFlights().search(filters) or []
+    except Exception:
+        return []
 
-    # Budget
-    budget_group = p.add_mutually_exclusive_group()
-    budget_group.add_argument(
-        "--max", type=float, default=DEFAULT_MAX_EUR,
-        help=f"Maximum total budget in EUR (default: {DEFAULT_MAX_EUR})",
-    )
-    budget_group.add_argument(
-        "--no-budget", action="store_true",
-        help="No budget cap — return all results regardless of price.",
-    )
 
-    # Cabin class
-    p.add_argument(
-        "--cabin", default=DEFAULT_CABIN, choices=list(CABIN_MAP.keys()),
-        help=f"Cabin class (default: {DEFAULT_CABIN}). "
-             "Choices: economy | premium_economy | business | first",
-    )
+def _search_round_trip_http(origin, dest, dep_date, ret_date, out_window, ret_window, seat_type):
+    """
+    Native round-trip search.
+    Strategy: one call with both legs declared. If the library returns bare
+    FlightResult objects (no pairing yet), do one follow-up call for the
+    cheapest return — at most 2 HTTP calls total.
+    """
+    try:
+        filters_out = FlightSearchFilters(
+            passenger_info=PassengerInfo(adults=1),
+            flight_segments=[
+                make_segment(origin, dest, dep_date, out_window),
+                make_segment(dest, origin, ret_date, ret_window),
+            ],
+            seat_type=seat_type,
+            stops=MaxStops.ANY,
+            sort_by=SortBy.CHEAPEST,
+            trip_type=TripType.ROUND_TRIP,
+        )
+        outbound_results = SearchFlights().search(filters_out, top_n=1) or []
 
-    # Search mode
-    p.add_argument(
-        "--mode", default=DEFAULT_MODE,
-        choices=["combined", "roundtrip", "oneway"],
-        help="'combined' = two separate one-way tickets (good for low-cost / mixed airlines). "
-             "'roundtrip' = single RT ticket (better for traditional carriers). "
-             "'oneway' = outbound only, no return (--nights ignored). "
-             f"Default: {DEFAULT_MODE}",
-    )
+        pairs = []
+        for item in outbound_results:
+            if isinstance(item, tuple):
+                pairs.append(item)
+            else:
+                filters_ret = FlightSearchFilters(
+                    passenger_info=PassengerInfo(adults=1),
+                    flight_segments=[
+                        make_segment(origin, dest, dep_date, out_window, selected_flight=item),
+                        make_segment(dest, origin, ret_date, ret_window),
+                    ],
+                    seat_type=seat_type,
+                    stops=MaxStops.ANY,
+                    sort_by=SortBy.CHEAPEST,
+                    trip_type=TripType.ROUND_TRIP,
+                )
+                ret_results = SearchFlights().search(filters_ret, top_n=1) or []
+                for ret_item in ret_results:
+                    pairs.append((item, ret_item) if not isinstance(ret_item, tuple) else ret_item)
+        return pairs
+    except Exception:
+        return []
 
-    # Output
-    p.add_argument(
-        "--output", default="results.csv", metavar="FILE",
-        help="CSV output filename (default: results.csv)",
-    )
 
-    return p.parse_args()
-
+# ══════════════════════════════════════════════════════════════
+#  Model / formatting helpers
+# ══════════════════════════════════════════════════════════════
 
 def parse_time_window(s):
-    """Convert 'HH-HH' string to TimeRestrictions object, or None if not provided."""
+    """Convert 'HH-HH' string to TimeRestrictions, or None."""
     if not s:
         return None
     parts = s.split("-")
@@ -214,27 +238,7 @@ def parse_time_window(s):
     return TimeRestrictions(earliest_departure=int(parts[0]), latest_departure=int(parts[1]))
 
 
-def build_date_pairs(date_from, date_to, nights_min, nights_max,
-                     dep_days, time_out, time_ret):
-    """
-    Generate all (dep_date, ret_date, time_out, time_ret, label) tuples
-    within the given date range.
-    """
-    DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
-    pairs = []
-    d = date_from
-    while d <= date_to:
-        if d.weekday() in dep_days:
-            for nights in range(nights_min, nights_max + 1):
-                ret = d + timedelta(days=nights)
-                label = f"{nights}n {DAYS[d.weekday()]}→{DAYS[ret.weekday()]}"
-                pairs.append((d, ret, time_out, time_ret, label))
-        d += timedelta(days=1)
-    return pairs
-
-
 def make_segment(origin, dest, travel_date, time_window_str, selected_flight=None):
-    """Build a FlightSegment with optional time restriction and pre-selected flight."""
     seg = dict(
         departure_airport=[[origin, 0]],
         arrival_airport=[[dest, 0]],
@@ -248,74 +252,6 @@ def make_segment(origin, dest, travel_date, time_window_str, selected_flight=Non
     return FlightSegment(**seg)
 
 
-def search_one_way(origin, dest, travel_date, time_window, seat_type):
-    """Search a single one-way flight. Used by both 'oneway' and 'combined' modes."""
-    try:
-        filters = FlightSearchFilters(
-            passenger_info=PassengerInfo(adults=1),
-            flight_segments=[make_segment(origin, dest, travel_date, time_window)],
-            seat_type=seat_type,
-            stops=MaxStops.ANY,
-            sort_by=SortBy.CHEAPEST,
-            trip_type=TripType.ONE_WAY,
-        )
-        return SearchFlights().search(filters) or []
-    except Exception:
-        return []
-
-
-def search_round_trip(origin, dest, dep_date, ret_date, out_window, ret_window, seat_type):
-    """
-    Search a native round-trip ticket (TripType.ROUND_TRIP).
-    Returns a list of (outbound_flight, return_flight) tuples with real combined pricing
-    as shown on Google Flights.
-    """
-    try:
-        # Step 1: fetch outbound options
-        filters_out = FlightSearchFilters(
-            passenger_info=PassengerInfo(adults=1),
-            flight_segments=[
-                make_segment(origin, dest, dep_date, out_window),
-                make_segment(dest, origin, ret_date, ret_window),
-            ],
-            seat_type=seat_type,
-            stops=MaxStops.ANY,
-            sort_by=SortBy.CHEAPEST,
-            trip_type=TripType.ROUND_TRIP,
-        )
-        outbound_results = SearchFlights().search(filters_out, top_n=5) or []
-
-        # The fli library may return already-paired tuples or individual FlightResult objects
-        pairs = []
-        for item in outbound_results:
-            if isinstance(item, tuple):
-                # Already a (out, ret) pair — add directly
-                pairs.append(item)
-            else:
-                # Outbound flight only — fetch matching return legs
-                filters_ret = FlightSearchFilters(
-                    passenger_info=PassengerInfo(adults=1),
-                    flight_segments=[
-                        make_segment(origin, dest, dep_date, out_window, selected_flight=item),
-                        make_segment(dest, origin, ret_date, ret_window),
-                    ],
-                    seat_type=seat_type,
-                    stops=MaxStops.ANY,
-                    sort_by=SortBy.CHEAPEST,
-                    trip_type=TripType.ROUND_TRIP,
-                )
-                ret_results = SearchFlights().search(filters_ret, top_n=3) or []
-                for ret_item in ret_results:
-                    if isinstance(ret_item, tuple):
-                        pairs.append(ret_item)
-                    else:
-                        pairs.append((item, ret_item))
-                time.sleep(0.5)
-        return pairs
-    except Exception:
-        return []
-
-
 def format_flight(flight):
     """Extract display fields from a FlightResult, applying known airline name fixes."""
     if not flight or not flight.legs:
@@ -323,44 +259,197 @@ def format_flight(flight):
     leg = flight.legs[0]
     airline_raw = leg.airline.value if hasattr(leg.airline, "value") else str(leg.airline)
     return {
-        "price":          flight.price,
-        "airline":        AIRLINE_NAME_FIXES.get(airline_raw, airline_raw),
-        "airline_raw":    airline_raw,
-        "flight_number":  leg.flight_number or "",
-        "dep_time":       leg.departure_datetime.strftime("%H:%M") if leg.departure_datetime else "?",
-        "arr_time":       leg.arrival_datetime.strftime("%H:%M") if leg.arrival_datetime else "?",
-        "stops":          flight.stops,
-        "has_warning":    airline_raw in AIRLINE_NAME_FIXES,
+        "price":         flight.price,
+        "airline":       AIRLINE_NAME_FIXES.get(airline_raw, airline_raw),
+        "airline_raw":   airline_raw,
+        "flight_number": leg.flight_number or "",
+        "dep_time":      leg.departure_datetime.strftime("%H:%M") if leg.departure_datetime else "?",
+        "arr_time":      leg.arrival_datetime.strftime("%H:%M") if leg.arrival_datetime else "?",
+        "stops":         flight.stops,
+        "has_warning":   airline_raw in AIRLINE_NAME_FIXES,
     }
 
 
 def print_result(r, mode):
-    """Pretty-print a single result entry to stdout."""
+    """Pretty-print a single result entry."""
     o = r["out"]
     rt = r["ret"]
     has_warn = o["has_warning"] or (rt["has_warning"] if rt else False)
     warn_tag = "  ⚠️  CHECK AIRLINE NAME" if has_warn else ""
     mode_tag = " [RT]" if mode == "roundtrip" else (" [OW]" if mode == "oneway" else "")
     price_str = f"€{r['total']:.0f}" if r["total"] is not None else "€?"
-
     label = "PRICE" if mode == "oneway" else "TOTAL"
-    print(f"💶 {label} {price_str}  [{r['label']}]{mode_tag}{warn_tag}")
-    print(f"   ✈  OUT    {r['dep_date'].strftime('%a %d/%m')}  "
-          f"{r['origin']} → {r['dest']}  "
-          f"{o['dep_time']} → {o['arr_time']}  {o['airline']} {o['flight_number']}  "
-          f"€{o['price']:.0f}  ({o['stops']} stop{'s' if o['stops'] != 1 else ''})")
+    tprint(f"💶 {label} {price_str}  [{r['label']}]{mode_tag}{warn_tag}")
+    tprint(f"   ✈  OUT    {r['dep_date'].strftime('%a %d/%m')}  "
+           f"{r['origin']} → {r['dest']}  "
+           f"{o['dep_time']} → {o['arr_time']}  {o['airline']} {o['flight_number']}  "
+           f"€{o['price']:.0f}  ({o['stops']} stop{'s' if o['stops'] != 1 else ''})")
     if rt:
-        print(f"   ↩  RET    {r['ret_date'].strftime('%a %d/%m')}  "
-              f"{r['dest']} → {r['ret_ap']}  "
-              f"{rt['dep_time']} → {rt['arr_time']}  {rt['airline']} {rt['flight_number']}  "
-              f"€{rt['price']:.0f}  ({rt['stops']} stop{'s' if rt['stops'] != 1 else ''})")
-    print()
+        tprint(f"   ↩  RET    {r['ret_date'].strftime('%a %d/%m')}  "
+               f"{r['dest']} → {r['ret_ap']}  "
+               f"{rt['dep_time']} → {rt['arr_time']}  {rt['airline']} {rt['flight_number']}  "
+               f"€{rt['price']:.0f}  ({rt['stops']} stop{'s' if rt['stops'] != 1 else ''})")
+    tprint()
 
+
+# ══════════════════════════════════════════════════════════════
+#  Per-task search functions (one unit of work for the thread pool)
+# ══════════════════════════════════════════════════════════════
+
+def task_oneway(origin, dest, dep_date, out_w, label, seat_type, max_eur):
+    flights = cached_search_one_way(origin, dest, dep_date, out_w, seat_type)
+    if not flights:
+        return None
+    best = flights[0]
+    if best.price is None or (max_eur and best.price > max_eur):
+        return None
+    o = format_flight(best)
+    if not o:
+        return None
+    return {
+        "label": label, "dep_date": dep_date, "ret_date": None,
+        "origin": origin.name, "dest": dest.name, "ret_ap": None,
+        "out": o, "ret": None, "total": best.price,
+    }
+
+
+def task_roundtrip(origin, dest, dep_date, ret_date, out_w, ret_w, label, seat_type, max_eur):
+    pairs = _search_round_trip_http(origin, dest, dep_date, ret_date, out_w, ret_w, seat_type)
+    for out_flight, ret_flight in pairs[:1]:
+        o = format_flight(out_flight)
+        r = format_flight(ret_flight)
+        if not o or not r:
+            continue
+        total = o["price"] or 0
+        if max_eur and total > max_eur:
+            return None
+        return {
+            "label": label, "dep_date": dep_date, "ret_date": ret_date,
+            "origin": origin.name, "dest": dest.name, "ret_ap": origin.name,
+            "out": o, "ret": r, "total": total,
+        }
+    return None
+
+
+def task_combined(origin, dest, dep_date, ret_date, out_w, ret_w, label,
+                  seat_type, max_eur, all_origins):
+    """
+    Search outbound + best return across all origin airports in parallel.
+    The outbound is fetched first; if it already exceeds budget the return
+    calls are skipped entirely.
+    """
+    out_flights = cached_search_one_way(origin, dest, dep_date, out_w, seat_type)
+    if not out_flights:
+        return None
+    best_out = out_flights[0]
+    if best_out.price is None or (max_eur and best_out.price >= max_eur):
+        return None
+
+    # Fetch returns for all origin airports in parallel (small inner pool)
+    best_ret = None
+    best_ret_ap = origin
+    ret_results = {}
+
+    with ThreadPoolExecutor(max_workers=len(all_origins)) as inner:
+        futs = {
+            inner.submit(cached_search_one_way, dest, ret_ap, ret_date, ret_w, seat_type): ret_ap
+            for ret_ap in all_origins
+        }
+        for fut in as_completed(futs):
+            ret_ap = futs[fut]
+            rf = fut.result()
+            if rf and rf[0].price is not None:
+                if best_ret is None or rf[0].price < best_ret.price:
+                    best_ret = rf[0]
+                    best_ret_ap = ret_ap
+
+    if best_ret is None or best_ret.price is None:
+        return None
+
+    total = best_out.price + best_ret.price
+    if max_eur and total > max_eur:
+        return None
+
+    o = format_flight(best_out)
+    r = format_flight(best_ret)
+    if not o or not r:
+        return None
+    return {
+        "label": label, "dep_date": dep_date, "ret_date": ret_date,
+        "origin": origin.name, "dest": dest.name, "ret_ap": best_ret_ap.name,
+        "out": o, "ret": r, "total": total,
+    }
+
+
+# ══════════════════════════════════════════════════════════════
+#  CLI
+# ══════════════════════════════════════════════════════════════
+
+def build_date_pairs(date_from, date_to, nights_min, nights_max,
+                     dep_days, time_out, time_ret):
+    DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+    pairs = []
+    d = date_from
+    while d <= date_to:
+        if d.weekday() in dep_days:
+            for nights in range(nights_min, nights_max + 1):
+                ret = d + timedelta(days=nights)
+                label = f"{nights}n {DAYS[d.weekday()]}→{DAYS[ret.weekday()]}"
+                pairs.append((d, ret, time_out, time_ret, label))
+        d += timedelta(days=1)
+    return pairs
+
+
+def parse_args():
+    p = argparse.ArgumentParser(
+        description="flisearch — Find cheap flights via Google Flights",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=__doc__,
+    )
+    p.add_argument("--origins", nargs="+", default=DEFAULT_ORIGINS, metavar="IATA",
+                   help=f"Departure airport(s) (default: {' '.join(DEFAULT_ORIGINS)})")
+    p.add_argument("--dest", nargs="+", default=None, metavar="IATA",
+                   help="Specific destination(s). If omitted, scans ~80 European airports.")
+    p.add_argument("--from", dest="date_from", default=DEFAULT_DATE_FROM, metavar="YYYY-MM-DD",
+                   help=f"Start of search period (default: {DEFAULT_DATE_FROM})")
+    p.add_argument("--to", dest="date_to", default=DEFAULT_DATE_TO, metavar="YYYY-MM-DD",
+                   help=f"End of search period (default: {DEFAULT_DATE_TO})")
+    p.add_argument("--nights", nargs=2, type=int, default=None, metavar=("MIN", "MAX"),
+                   help="Min/max nights away (max 21). Default for combined/roundtrip without "
+                        "--nights: use --from as departure and --to as return (single pair).")
+    p.add_argument("--dep-days", nargs="+", type=int, default=None, metavar="N",
+                   help="Departure weekdays: 0=Mon … 6=Sun.")
+    p.add_argument("--time-out", default=None, metavar="HH-HH",
+                   help="Outbound departure time window e.g. 18-23.")
+    p.add_argument("--time-ret", default=None, metavar="HH-HH",
+                   help="Return departure time window e.g. 8-23.")
+    budget_group = p.add_mutually_exclusive_group()
+    budget_group.add_argument("--max", type=float, default=None,
+                               help="Maximum total budget EUR (e.g. --max 200). "
+                                    "If neither --max nor --no-budget is given, no budget cap is applied.")
+    budget_group.add_argument("--no-budget", action="store_true",
+                               help="Explicitly disable budget cap (default behaviour when --max is not set).")
+    p.add_argument("--cabin", default=DEFAULT_CABIN, choices=list(CABIN_MAP.keys()),
+                   help=f"Cabin class (default: {DEFAULT_CABIN})")
+    p.add_argument("--mode", default=DEFAULT_MODE,
+                   choices=["combined", "roundtrip", "oneway"],
+                   help=f"Search mode (default: {DEFAULT_MODE})")
+    p.add_argument("--workers", type=int, default=DEFAULT_WORKERS,
+                   help=f"Parallel search threads (default: {DEFAULT_WORKERS}). "
+                        "Increase for speed, decrease if you hit rate limits.")
+    p.add_argument("--output", default="results.csv", metavar="FILE",
+                   help="CSV output filename (default: results.csv)")
+    return p.parse_args()
+
+
+# ══════════════════════════════════════════════════════════════
+#  Main
+# ══════════════════════════════════════════════════════════════
 
 def main():
     args = parse_args()
 
-    # ── Resolve origin airports ────────────────────────────────
+    # Origins
     origins = []
     for code in [c.upper() for c in args.origins]:
         try:
@@ -371,7 +460,7 @@ def main():
         print("❌ No valid origin airports. Exiting.")
         return
 
-    # ── Parse date range ───────────────────────────────────────
+    # Dates
     try:
         date_from = datetime.strptime(args.date_from, "%Y-%m-%d").date()
         date_to   = datetime.strptime(args.date_to,   "%Y-%m-%d").date()
@@ -382,31 +471,29 @@ def main():
         print("❌ --from date must be before --to date.")
         return
 
-    # ── Budget ─────────────────────────────────────────────────
-    max_eur = None if args.no_budget else args.max
-
-    # ── Cabin / mode ───────────────────────────────────────────
+    # If --max is not provided, no budget cap is applied (same as --no-budget)
+    max_eur = args.max  # None if not set
     seat_type   = CABIN_MAP[args.cabin]
     cabin_label = CABIN_LABEL[args.cabin]
     mode        = args.mode
+    workers     = max(1, args.workers)
 
-    # ── Destinations ───────────────────────────────────────────
+    # Destinations
     if args.dest:
         destinations = []
         for code in [c.upper() for c in args.dest]:
             try:
                 destinations.append(Airport[code])
             except KeyError:
-                print(f"⚠️  Unknown destination airport '{code}' — skipped.")
+                print(f"⚠️  Unknown destination '{code}' — skipped.")
         if not destinations:
             print("❌ No valid destination airports. Exiting.")
             return
     else:
         destinations = DEFAULT_DESTINATIONS
 
-    # ── Build date pairs ───────────────────────────────────────
+    # Date pairs
     if mode == "oneway":
-        # One-way: one entry per calendar day in range (filtered by dep-days)
         DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
         dep_days = args.dep_days if args.dep_days else list(range(7))
         all_pairs = []
@@ -417,21 +504,18 @@ def main():
             d += timedelta(days=1)
 
     elif args.nights:
-        # Custom night range
         nights_min, nights_max = args.nights[0], min(args.nights[1], 21)
         dep_days = args.dep_days if args.dep_days else list(range(7))
         all_pairs = build_date_pairs(date_from, date_to, nights_min, nights_max,
                                      dep_days, args.time_out, args.time_ret)
 
     elif args.dep_days:
-        # Custom departure days, default night range
         all_pairs = build_date_pairs(date_from, date_to,
                                      DEFAULT_NIGHTS_MIN, DEFAULT_NIGHTS_MAX,
                                      args.dep_days, args.time_out, args.time_ret)
 
     elif mode in ("roundtrip", "combined") and not args.nights and not args.dep_days:
-        # No --nights specified with roundtrip/combined: treat --from as departure
-        # date and --to as return date — single fixed pair.
+        # No --nights: treat --from as departure, --to as return (single pair)
         nights = (date_to - date_from).days
         label = f"{nights}n {date_from.strftime('%a')}→{date_to.strftime('%a')}"
         all_pairs = [(date_from, date_to, args.time_out, args.time_ret, label)]
@@ -447,7 +531,15 @@ def main():
                     seen.add(key)
                     all_pairs.append(pair)
 
-    # ── Summary header ─────────────────────────────────────────
+    # Build task list
+    tasks = [
+        (origin, dest, dep_date, ret_date, out_w, ret_w, label)
+        for origin in origins
+        for dest in destinations if dest != origin
+        for dep_date, ret_date, out_w, ret_w, label in all_pairs
+    ]
+
+    total_tasks = len(tasks)
     budget_str  = f"max €{max_eur:.0f}" if max_eur else "no limit"
     dest_str    = (", ".join(d.name for d in destinations)
                    if args.dest else f"{len(destinations)} European destinations")
@@ -456,9 +548,8 @@ def main():
         "roundtrip": "Native round-trip ticket",
         "oneway":    "One-way only",
     }
-    trip_label  = "one-way" if mode == "oneway" else "round-trip"
 
-    print(f"\n🔍  flisearch — {trip_label} search")
+    print(f"\n🔍  flisearch — {'one-way' if mode == 'oneway' else 'round-trip'} search")
     print(f"✈   Origins:      {', '.join(o.name for o in origins)}")
     print(f"🌍  Destinations: {dest_str}")
     print(f"📅  Period:       {date_from} → {date_to}")
@@ -466,125 +557,60 @@ def main():
     print(f"💺  Cabin:        {cabin_label}")
     print(f"💶  Budget:       {budget_str}")
     print(f"🔄  Mode:         {mode_labels[mode]}")
+    print(f"⚡  Workers:      {workers} parallel threads")
+    print(f"🔢  Total tasks:  {total_tasks}")
     print(f"⚠️   Always verify prices on Google Flights before booking.\n")
 
     results_found = []
-    count = 0
+    completed = 0
+    lock = threading.Lock()
 
-    # ── Main search loop ───────────────────────────────────────
-    for origin in origins:
-        for dest in destinations:
-            if dest == origin:
-                continue
+    def run_task(task):
+        origin, dest, dep_date, ret_date, out_w, ret_w, label = task
+        if mode == "oneway":
+            return task_oneway(origin, dest, dep_date, out_w, label, seat_type, max_eur)
+        elif mode == "roundtrip":
+            return task_roundtrip(origin, dest, dep_date, ret_date, out_w, ret_w,
+                                  label, seat_type, max_eur)
+        else:
+            return task_combined(origin, dest, dep_date, ret_date, out_w, ret_w,
+                                 label, seat_type, max_eur, origins)
 
-            for dep_date, ret_date, out_w, ret_w, label in all_pairs:
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        futures = {executor.submit(run_task, task): task for task in tasks}
+        for fut in as_completed(futures):
+            with lock:
+                completed += 1
+                pct = completed * 100 // total_tasks
 
-                # ── ONE-WAY ───────────────────────────────────
-                if mode == "oneway":
-                    flights = search_one_way(origin, dest, dep_date, out_w, seat_type)
-                    if not flights:
-                        time.sleep(0.3)
-                        continue
-                    best = flights[0]
-                    if best.price is None:
-                        time.sleep(0.2)
-                        continue
-                    if max_eur and best.price > max_eur:
-                        time.sleep(0.2)
-                        continue
-                    o = format_flight(best)
-                    if o:
-                        entry = {
-                            "label": label, "dep_date": dep_date, "ret_date": None,
-                            "origin": origin.name, "dest": dest.name, "ret_ap": None,
-                            "out": o, "ret": None, "total": best.price,
-                        }
-                        results_found.append(entry)
-                        count += 1
-                        warn = " ⚠️" if o["has_warning"] else ""
-                        print(f"✅ [{count}] {dep_date} {origin.name} → {dest.name} "
-                              f"€{best.price:.0f}{warn}")
-                    time.sleep(0.4)
-
-                # ── NATIVE ROUND-TRIP ─────────────────────────
-                elif mode == "roundtrip":
-                    rt_pairs = search_round_trip(
-                        origin, dest, dep_date, ret_date, out_w, ret_w, seat_type)
-                    for out_flight, ret_flight in rt_pairs[:1]:
-                        o = format_flight(out_flight)
-                        r = format_flight(ret_flight)
-                        if not o or not r:
-                            continue
-                        # In a native round-trip the full combined price is
-                        # always on the outbound leg. The return leg price is 0 or
-                        # a duplicate — never sum them.
-                        total = o["price"] or 0
-                        if max_eur and total > max_eur:
-                            continue
-                        entry = {
-                            "label": label, "dep_date": dep_date, "ret_date": ret_date,
-                            "origin": origin.name, "dest": dest.name,
-                            "ret_ap": origin.name,
-                            "out": o, "ret": r, "total": total,
-                        }
-                        results_found.append(entry)
-                        count += 1
-                        warn = " ⚠️" if (o["has_warning"] or r["has_warning"]) else ""
-                        print(f"✅ [{count}] [RT] {dep_date} {origin.name} ⇄ {dest.name} "
-                              f"€{total:.0f}{warn}")
-                    time.sleep(0.8)
-
-                # ── COMBINED (two one-ways) ────────────────────
+            entry = fut.result()
+            if entry:
+                with lock:
+                    results_found.append(entry)
+                    count = len(results_found)
+                o = entry["out"]
+                r = entry["ret"]
+                warn = " ⚠️" if (o["has_warning"] or (r["has_warning"] if r else False)) else ""
+                if mode == "roundtrip":
+                    tprint(f"✅ [{count}] [RT] {entry['dep_date']} "
+                           f"{entry['origin']} ⇄ {entry['dest']} "
+                           f"€{entry['total']:.0f}{warn}  [{pct}%]")
+                elif mode == "oneway":
+                    tprint(f"✅ [{count}] {entry['dep_date']} "
+                           f"{entry['origin']} → {entry['dest']} "
+                           f"€{entry['total']:.0f}{warn}  [{pct}%]")
                 else:
-                    out_flights = search_one_way(origin, dest, dep_date, out_w, seat_type)
-                    if not out_flights:
-                        time.sleep(0.3)
-                        continue
-                    best_out = out_flights[0]
-                    if best_out.price is None:
-                        time.sleep(0.2)
-                        continue
-                    if max_eur and best_out.price >= max_eur:
-                        time.sleep(0.2)
-                        continue
+                    tprint(f"✅ [{count}] {entry['dep_date']} "
+                           f"{entry['origin']} → {entry['dest']} "
+                           f"€{o['price']:.0f} + {entry['ret_date']} "
+                           f"{entry['dest']} → {entry['ret_ap']} "
+                           f"€{r['price']:.0f} = €{entry['total']:.0f}{warn}  [{pct}%]")
+            else:
+                # Progress ticker every 5%
+                if completed % max(1, total_tasks // 20) == 0:
+                    tprint(f"   … {completed}/{total_tasks} tasks ({pct}%)", flush=True)
 
-                    # Search return across all origin airports (allows mixed airports)
-                    best_ret = None
-                    best_ret_ap = origin
-                    for ret_ap in origins:
-                        rf = search_one_way(dest, ret_ap, ret_date, ret_w, seat_type)
-                        if rf and rf[0].price is not None:
-                            if best_ret is None or rf[0].price < best_ret.price:
-                                best_ret = rf[0]
-                                best_ret_ap = ret_ap
-                        time.sleep(0.2)
-
-                    if best_ret is None or best_ret.price is None:
-                        continue
-
-                    total = best_out.price + best_ret.price
-                    if max_eur and total > max_eur:
-                        continue
-
-                    o = format_flight(best_out)
-                    r = format_flight(best_ret)
-                    if o and r:
-                        entry = {
-                            "label": label, "dep_date": dep_date, "ret_date": ret_date,
-                            "origin": origin.name, "dest": dest.name,
-                            "ret_ap": best_ret_ap.name,
-                            "out": o, "ret": r, "total": total,
-                        }
-                        results_found.append(entry)
-                        count += 1
-                        warn = " ⚠️" if (o["has_warning"] or r["has_warning"]) else ""
-                        print(f"✅ [{count}] {dep_date} {origin.name} → {dest.name} "
-                              f"€{best_out.price:.0f} + {ret_date} "
-                              f"{dest.name} → {best_ret_ap.name} "
-                              f"€{best_ret.price:.0f} = €{total:.0f}{warn}")
-                    time.sleep(0.5)
-
-    # ── Final summary ──────────────────────────────────────────
+    # Final summary
     print(f"\n{'═' * 70}")
     budget_tag = f"under €{max_eur:.0f}" if max_eur else "found"
     print(f"🎉  {len(results_found)} FLIGHTS {budget_tag.upper()} — "
@@ -604,7 +630,6 @@ def main():
         print(f"    The flight number is reliable — search it on Google Flights to find the "
               f"real carrier.\n")
 
-    # ── CSV export ─────────────────────────────────────────────
     if results_found:
         out_file = args.output
         with open(out_file, "w", newline="", encoding="utf-8") as f:
