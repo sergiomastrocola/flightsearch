@@ -17,8 +17,8 @@
 
 ```bash
 # 1. Clone the repo
-git clone https://github.com/YOUR_USERNAME/flisearch.git
-cd flisearch
+git clone https://github.com/sergiomastocola/flightsearch.git
+cd flightsearch
 
 # 2. Create a virtual environment
 python3 -m venv venv
