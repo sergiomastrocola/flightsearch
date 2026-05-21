@@ -52,7 +52,8 @@ python flightsearch.py --help
 | Flag | Description | Default |
 |---|---|---|
 | `--origins IATA [...]` | Departure airport(s) | `BGY MXP LIN` |
-| `--dest IATA [...]` | Specific destination(s). If omitted, scans ~80 European airports | — |
+| `--dest IATA [...]` | Specific destination(s) as IATA codes e.g. `--dest BCN LIS`. Takes precedence over `--region` | — |
+| `--region REGION [...]` | World region(s) to scan (see table below). Default: `europe`. Multiple allowed e.g. `--region europe africa` | `europe` |
 | `--from YYYY-MM-DD` | Start of search period | `2026-07-01` |
 | `--to YYYY-MM-DD` | End of search period | `2026-09-30` |
 | `--nights MIN MAX` | Min/max nights away (max 21). If omitted in `combined`/`roundtrip` mode: `--from` is used as departure date and `--to` as return date (single fixed pair). | `2 3` |
@@ -65,6 +66,19 @@ python flightsearch.py --help
 | `--mode MODE` | `combined` \| `roundtrip` \| `oneway` (see below) | `combined` |
 | `--workers N` | Parallel search threads. Increase for speed, reduce if rate-limited | `4` |
 | `--output FILE` | CSV output filename | `results.csv` |
+
+
+### Regions (`--region`)
+
+| Value | Alias(es) | Coverage |
+|---|---|---|
+| `europe` | `eu` | ~134 airports across Italy, Iberia, France, Benelux, UK & Ireland, DACH, Nordics, Eastern Europe, Greece, Turkey, Caucasus |
+| `africa` | `af` | ~52 airports across North, West, East, Central and Southern Africa + Indian Ocean islands |
+| `north_america` | `na`, `northamerica` | ~88 airports in USA, Canada, Mexico, Caribbean and Central America |
+| `south_america` | `sa`, `southamerica` | ~48 airports in Brazil, Argentina, Chile, Colombia, Peru, Ecuador and more |
+| `asia` | `as` | ~79 airports in Middle East, South Asia, Southeast Asia, East Asia, Central Asia |
+| `australia_pacific` | `ap`, `pacific`, `oceania` | ~39 airports in Australia, New Zealand and Pacific islands |
+| `world` | `all` | All of the above (~440 airports) |
 
 ### Search Modes
 
@@ -97,6 +111,12 @@ python flightsearch.py --dest TBS --mode roundtrip --nights 5 7 --max 400
 # Business to Dubai, Friday evening departures, 4–6 nights
 python flightsearch.py --dest DXB --cabin business --mode roundtrip \
     --nights 4 6 --dep-days 4 --time-out 18-23
+
+# Scan Africa and Middle East (asia includes Middle East)
+python flightsearch.py --region africa asia --mode roundtrip --no-budget
+
+# Worldwide scan (all regions, ~440 destinations)
+python flightsearch.py --region world --mode roundtrip --nights 7 14
 
 # Faster scan with more parallel threads
 python flightsearch.py --workers 8
@@ -173,7 +193,8 @@ python flightsearch.py --help
 | Parametro | Descrizione | Default |
 |---|---|---|
 | `--origins IATA [...]` | Aeroporti di partenza | `BGY MXP LIN` |
-| `--dest IATA [...]` | Destinazione/i specifica/e. Se omesso scansiona ~80 aeroporti europei | — |
+| `--dest IATA [...]` | Destinazione/i specifica/e come codici IATA es. `--dest BCN LIS`. Ha priorità su `--region` | — |
+| `--region REGION [...]` | Regione/i geografica/e da scansionare (vedi tabella sotto). Default: `europe`. Più regioni consentite es. `--region europe africa` | `europe` |
 | `--from YYYY-MM-DD` | Inizio periodo di ricerca | `2026-07-01` |
 | `--to YYYY-MM-DD` | Fine periodo di ricerca | `2026-09-30` |
 | `--nights MIN MAX` | Notti min/max (massimo 21). Se omesso in modalità `combined`/`roundtrip`: `--from` viene usato come data di andata e `--to` come data di ritorno (coppia fissa unica) | `2 3` |
@@ -186,6 +207,19 @@ python flightsearch.py --help
 | `--mode MODALITA` | `combined` \| `roundtrip` \| `oneway` (vedi sotto) | `combined` |
 | `--workers N` | Thread di ricerca paralleli. Aumenta per velocità, riduci in caso di rate limit | `4` |
 | `--output FILE` | Nome file CSV output | `results.csv` |
+
+
+### Regioni (`--region`)
+
+| Valore | Alias | Copertura |
+|---|---|---|
+| `europe` | `eu` | ~134 aeroporti in Italia, Iberia, Francia, Benelux, UK & Irlanda, DACH, Nordici, Europa orientale, Grecia, Turchia, Caucaso |
+| `africa` | `af` | ~52 aeroporti in Africa settentrionale, occidentale, orientale, centrale e meridionale + isole dell'Oceano Indiano |
+| `north_america` | `na`, `northamerica` | ~88 aeroporti in USA, Canada, Messico, Caraibi e America centrale |
+| `south_america` | `sa`, `southamerica` | ~48 aeroporti in Brasile, Argentina, Cile, Colombia, Perù, Ecuador e altri |
+| `asia` | `as` | ~79 aeroporti in Medio Oriente, Asia meridionale, Asia sudorientale, Asia orientale, Asia centrale |
+| `australia_pacific` | `ap`, `pacific`, `oceania` | ~39 aeroporti in Australia, Nuova Zelanda e isole del Pacifico |
+| `world` | `all` | Tutte le regioni (~440 aeroporti) |
 
 ### Modalità di ricerca
 
@@ -218,6 +252,12 @@ python flightsearch.py --dest TBS --mode roundtrip --nights 5 7 --max 400
 # Business verso Dubai, partenza venerdì sera, 4–6 notti
 python flightsearch.py --dest DXB --cabin business --mode roundtrip \
     --nights 4 6 --dep-days 4 --time-out 18-23
+
+# Scan Africa and Middle East (asia includes Middle East)
+python flightsearch.py --region africa asia --mode roundtrip --no-budget
+
+# Worldwide scan (all regions, ~440 destinations)
+python flightsearch.py --region world --mode roundtrip --nights 7 14
 
 # Faster scan with more parallel threads
 python flightsearch.py --workers 8

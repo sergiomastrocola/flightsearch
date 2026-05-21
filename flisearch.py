@@ -90,34 +90,130 @@ AIRLINE_NAME_FIXES = {
     "Eastern Airlines, LLC": "⚠️ 2D (verify on Google Flights)",
 }
 
-# ~80 European and Mediterranean destinations served by low-cost carriers
-# from BGY / LIN / MXP. You can override this with --dest.
-DEFAULT_DESTINATIONS = [
-    Airport.BCN, Airport.MAD, Airport.LIS, Airport.OPO,
-    Airport.CDG, Airport.ORY, Airport.AMS, Airport.BRU,
-    Airport.VIE, Airport.PRG, Airport.WAW, Airport.GDN,
-    Airport.KRK, Airport.BUD, Airport.BEG, Airport.SOF,
-    Airport.SKG, Airport.ATH, Airport.OTP, Airport.TBS,
-    Airport.EVN, Airport.FCO, Airport.NAP, Airport.PMO,
-    Airport.CTA, Airport.CAG, Airport.BRI, Airport.BLQ,
-    Airport.VCE, Airport.TRN, Airport.GOA, Airport.PSA,
-    Airport.FLR, Airport.TSF, Airport.LJU, Airport.ZAG,
-    Airport.DBV, Airport.SPU, Airport.TGD, Airport.SKP,
-    Airport.LCA, Airport.ESB, Airport.IST, Airport.SAW,
-    Airport.LED, Airport.RIX, Airport.TLL, Airport.VNO,
-    Airport.HEL, Airport.ARN, Airport.CPH, Airport.OSL,
-    Airport.DUB, Airport.EDI, Airport.STN, Airport.LTN,
-    Airport.MAN, Airport.BHX, Airport.GLA,
-    Airport.HAM, Airport.DUS, Airport.CGN, Airport.FRA,
-    Airport.MUC, Airport.NUE, Airport.STR, Airport.BER,
-    Airport.LPL, Airport.BRS, Airport.EXT,
-    Airport.SVQ, Airport.VLC, Airport.AGP, Airport.PMI,
-    Airport.IBZ, Airport.TFS, Airport.LPA, Airport.ACE,
-    Airport.FNC, Airport.RAK, Airport.CMN,
-    Airport.TUN, Airport.ALG,
-    Airport.CHQ, Airport.HER, Airport.RHO,
-    Airport.CFU, Airport.ZTH, Airport.KGS, Airport.MYT,
-]
+# Airports grouped by world region.
+# Used when --region is specified or as default (europe) when --dest is not given.
+# Each list contains IATA codes of major airports with regular scheduled service.
+REGIONS: dict[str, list[str]] = {
+    "europe": [
+        # Italy
+        "BGY","MXP","LIN","FCO","NAP","PMO","CTA","CAG","BRI","BLQ","VCE","TRN","GOA","PSA","FLR","TSF",
+        # Iberia
+        "BCN","MAD","LIS","OPO","SVQ","VLC","AGP","PMI","IBZ","TFS","LPA","ACE","FNC","SCQ","BIO","VLL",
+        # France
+        "CDG","ORY","NCE","LYS","MRS","TLS","BOD","NTE","SXB",
+        # Benelux
+        "AMS","BRU","LGG","EIN","RTM","ANR",
+        # UK & Ireland
+        "LHR","LGW","STN","LTN","MAN","BHX","EDI","GLA","DUB","ORK","SNN","BFS","LPL","BRS","EXT","ABZ",
+        # DACH
+        "FRA","MUC","BER","DUS","HAM","STR","CGN","NUE","VIE","ZRH","GVA","BSL","SZG","INN","GRZ",
+        # Nordics & Baltics
+        "CPH","ARN","OSL","HEL","BGO","GOT","TRF","TLL","RIX","VNO","KEF",
+        # Eastern Europe
+        "WAW","KRK","GDN","WRO","POZ","BUD","PRG","BRQ","OTP","SOF","BEG","SKP","LJU","ZAG","DBV","SPU","TGD","TIV",
+        # Greece & Cyprus
+        "ATH","SKG","HER","CHQ","RHO","CFU","ZTH","KGS","MYT","LCA","PFO",
+        # Turkey
+        "IST","SAW","AYT","ADB","ESB","BJV",
+        # Caucasus & western Russia
+        "TBS","EVN","GYD","LED","SVO","DME","VKO",
+        # Other
+        "MLA","TIA","PRN",
+    ],
+    "africa": [
+        # North Africa
+        "CAI","HRG","SSH","LXR","CMN","RAK","AGA","TNG","TUN","SFA","MIR","ALG","ORN","CZL",
+        # West Africa
+        "ABV","LOS","ACC","DKR","ABJ","COO","OUA","BKO","NIM","LFW",
+        # East Africa
+        "NBO","MBA","ADD","DAR","ZNZ","KGL","EBB","JRO","ASM","HGA",
+        # Southern Africa
+        "JNB","CPT","DUR","HRE","LUN","LAD","MPM","WDH","GBE",
+        # Indian Ocean islands
+        "MRU","RUN","SEZ",
+        # Central Africa
+        "DLA","NSI","LBV","BZV","FIH","FBM",
+    ],
+    "north_america": [
+        # USA
+        "JFK","EWR","LGA","BOS","PHL","IAD","DCA","ATL","MIA","FLL","MCO","TPA","CLT",
+        "ORD","MDW","DTW","MSP","STL","MCI","DFW","IAH","HOU","DEN","PHX","LAS",
+        "LAX","SFO","SJC","OAK","SEA","PDX","SLC","ANC","HNL","OGG","SAN","SNA","BUR",
+        # Canada
+        "YYZ","YUL","YVR","YYC","YEG","YOW","YHZ","YWG",
+        # Mexico
+        "MEX","CUN","GDL","MTY","SJD","ZIH","PVR","MZT","OAX","VER",
+        # Caribbean
+        "HAV","SDQ","PUJ","SJU","STT","STX","BGI","ANU","SXM","SKB","POS","TAB",
+        "NAS","FPO","MBJ","KIN","GCM","CUR","AUA","BON","PTP","FDF","SFG",
+        # Central America
+        "GUA","SAL","TGU","MGA","SJO","PTY","BZE",
+    ],
+    "south_america": [
+        # Brazil
+        "GRU","GIG","BSB","SSA","REC","FOR","BEL","MAO","CWB","POA","FLN","CGH","VCP",
+        # Argentina
+        "EZE","AEP","COR","MDZ","BRC","IGR","USH",
+        # Chile
+        "SCL","IPC","PMC","ANF","CCP","IQQ",
+        # Colombia
+        "BOG","MDE","CLO","CTG","BAQ",
+        # Peru
+        "LIM","CUZ","AQP","IQT","TRU",
+        # Ecuador & Galapagos
+        "UIO","GYE","GPS",
+        # Venezuela
+        "CCS","MAR",
+        # Bolivia
+        "VVI","LPB","CBB",
+        # Paraguay & Uruguay
+        "ASU","MVD",
+        # Guyana & Suriname
+        "GEO","PBM",
+    ],
+    "asia": [
+        # Middle East
+        "DXB","AUH","DOH","KWI","BAH","AMM","BEY","TLV","RUH","JED","MCT","MED",
+        # South Asia
+        "DEL","BOM","MAA","BLR","CCU","HYD","GOI","CMB","DAC","KTM","MLE","KHI","LHE","ISB",
+        # Southeast Asia
+        "BKK","DMK","HKT","CNX","KBV","USM","SGN","HAN","DAD","KUL","LGK","PEN",
+        "SIN","CGK","DPS","SUB","MNL","CEB","BCD","RGN","VTE","BND",
+        # East Asia
+        "HKG","MFM","PEK","PVG","CAN","SZX","CTU","CKG","XIY","WUH","TSN",
+        "ICN","GMP","PUS","NRT","HND","KIX","NGO","CTS","TPE","TSA","KHH",
+        # Central Asia
+        "ALA","NQZ","TAS","SKD","DYU","ASB","GYD",
+        # Russia Far East
+        "VVO","KHV",
+    ],
+    "australia_pacific": [
+        # Australia
+        "SYD","MEL","BNE","PER","ADL","CBR","OOL","CNS","DRW","TSV","HBA","MKY","LST","ASP",
+        # New Zealand
+        "AKL","CHC","WLG","ZQN","DUD","NSN",
+        # Pacific islands
+        "NAN","SUV","APW","PPT","FAA","RAR","INU","TRW","MHQ","MAJ","POM","HON",
+        "GUM","SPN","PPG","TBU","VLI","HIR","FUN",
+    ],
+}
+
+REGION_ALIASES = {
+    "eu": "europe",
+    "af": "africa",
+    "na": "north_america",
+    "northamerica": "north_america",
+    "sa": "south_america",
+    "southamerica": "south_america",
+    "as": "asia",
+    "ap": "australia_pacific",
+    "pacific": "australia_pacific",
+    "oceania": "australia_pacific",
+    "world": None,  # special: all regions
+    "all": None,
+}
+
+DEFAULT_REGION = "europe"
 
 # ══════════════════════════════════════════════════════════════
 #  Thread-safe helpers
@@ -409,7 +505,15 @@ def parse_args():
     p.add_argument("--origins", nargs="+", default=DEFAULT_ORIGINS, metavar="IATA",
                    help=f"Departure airport(s) (default: {' '.join(DEFAULT_ORIGINS)})")
     p.add_argument("--dest", nargs="+", default=None, metavar="IATA",
-                   help="Specific destination(s). If omitted, scans ~80 European airports.")
+                   help="Specific destination(s) as IATA codes e.g. --dest BCN LIS. "
+                        "Takes precedence over --region.")
+    p.add_argument("--region", nargs="+", default=None,
+                   metavar="REGION",
+                   help="World region(s) to scan. Choices: "
+                        "europe (default), africa, north_america, south_america, asia, australia_pacific, world. "
+                        "Shortcuts: eu, af, na, sa, as, ap, oceania, all. "
+                        "Multiple regions allowed e.g. --region europe africa. "
+                        "Ignored when --dest is used.")
     p.add_argument("--from", dest="date_from", default=DEFAULT_DATE_FROM, metavar="YYYY-MM-DD",
                    help=f"Start of search period (default: {DEFAULT_DATE_FROM})")
     p.add_argument("--to", dest="date_to", default=DEFAULT_DATE_TO, metavar="YYYY-MM-DD",
@@ -480,6 +584,7 @@ def main():
 
     # Destinations
     if args.dest:
+        # Explicit IATA codes take precedence over --region
         destinations = []
         for code in [c.upper() for c in args.dest]:
             try:
@@ -490,7 +595,35 @@ def main():
             print("❌ No valid destination airports. Exiting.")
             return
     else:
-        destinations = DEFAULT_DESTINATIONS
+        # Build destination list from --region (default: europe)
+        selected_regions = args.region if args.region else [DEFAULT_REGION]
+        codes_set: list[str] = []
+        seen_codes: set[str] = set()
+        region_names_used: list[str] = []
+        for r in selected_regions:
+            r_key = REGION_ALIASES.get(r.lower(), r.lower())
+            if r_key is None:
+                # "world" / "all" — include every region
+                for reg_name, reg_codes in REGIONS.items():
+                    for c in reg_codes:
+                        if c not in seen_codes:
+                            seen_codes.add(c)
+                            codes_set.append(c)
+                region_names_used = list(REGIONS.keys())
+                break
+            elif r_key in REGIONS:
+                for c in REGIONS[r_key]:
+                    if c not in seen_codes:
+                        seen_codes.add(c)
+                        codes_set.append(c)
+                region_names_used.append(r_key)
+            else:
+                valid_keys = list(REGIONS.keys()) + list(REGION_ALIASES.keys())
+                print(f"⚠️  Unknown region '{r}'. Valid: {', '.join(sorted(set(valid_keys)))}")
+        if not codes_set:
+            print("❌ No valid destinations after region resolution. Exiting.")
+            return
+        destinations = [Airport[c] for c in codes_set if c != "" ]
 
     # Date pairs
     if mode == "oneway":
@@ -541,8 +674,14 @@ def main():
 
     total_tasks = len(tasks)
     budget_str  = f"max €{max_eur:.0f}" if max_eur else "no limit"
-    dest_str    = (", ".join(d.name for d in destinations)
-                   if args.dest else f"{len(destinations)} European destinations")
+    if args.dest:
+        dest_str = ", ".join(d.name for d in destinations)
+    elif args.region and any(r.lower() in ("world","all") for r in args.region):
+        dest_str = f"{len(destinations)} destinations worldwide"
+    elif args.region:
+        dest_str = f"{len(destinations)} destinations in: {', '.join(region_names_used)}"
+    else:
+        dest_str = f"{len(destinations)} destinations in: {DEFAULT_REGION}"
     mode_labels = {
         "combined":  "Two separate one-ways (combined)",
         "roundtrip": "Native round-trip ticket",
