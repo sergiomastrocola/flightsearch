@@ -5,32 +5,83 @@ Built on top of the `fli` library (https://github.com/punitarani/fli).
 Usage:
   python flisearch.py [options]
 
-Search modes (--mode):
-  combined   (default) Searches outbound and return as separate one-way tickets,
-             then combines them. Best for low-cost carriers and mixing airlines.
-  roundtrip  Searches a single round-trip ticket (real combined price from
-             Google Flights). Better for traditional carriers where the RT fare
-             is cheaper than two one-ways.
-  oneway     One-way only. --nights is ignored; searches every day in the period.
+All options:
+  Airports & destinations:
+    --origins IATA [...]      Departure airport(s). Default: BGY MXP LIN
+    --dest    IATA [...]      Specific destination(s). Overrides --region.
+    --region  REGION [...]    World region(s) to scan. Default: europe
+                              Choices: europe (eu), africa (af),
+                              north_america (na), south_america (sa),
+                              asia (as), australia_pacific (ap/oceania),
+                              world / all
+  Dates:
+    --from  YYYY-MM-DD        Start of search period. Default: 2026-07-01
+    --to    YYYY-MM-DD        End of search period.   Default: 2026-09-30
+
+  Trip duration:
+    --nights MIN MAX          Min/max nights (max 21). Default: 2-3 (weekend schemes).
+                              Combined/roundtrip without --nights: uses --from/--to
+                              as a single fixed departure/return date pair.
+    --dep-days N [...]        Departure weekdays: 0=Mon 1=Tue 2=Wed 3=Thu 4=Fri
+                              5=Sat 6=Sun. Default: 3 4 (Thu+Fri) for weekend mode.
+
+  Time windows:
+    --time-out HH-HH          Outbound departure window e.g. 18-23
+    --time-ret HH-HH          Return departure window  e.g.  8-23
+
+  Budget:
+    --max EUR                 Maximum total budget in EUR. If omitted: no cap.
+    --no-budget               Explicitly disable cap (same as omitting --max).
+
+  Cabin & mode:
+    --cabin CLASS             economy (default) | premium_economy | business | first
+    --mode  MODE              combined (default) | roundtrip | oneway
+                              combined  = two separate one-ways; best for low-cost,
+                                          allows different airports per leg.
+                              roundtrip = native RT ticket; better for traditional
+                                          carriers where A/R < 2x one-way.
+                              oneway    = outbound only; --nights ignored.
+
+  Performance:
+    --workers N               Parallel search threads. Default: 4.
+                              Increase for speed; decrease if rate-limited.
+
+  Output:
+    --output FILE             CSV filename. Default: results.csv
+                              Rows are written in real time as results arrive.
+    --airport-names           Show full airport names (e.g. "Barcelona International
+                              Airport (BCN)") instead of IATA codes. Default: off.
 
 Examples:
-  # Default: BGY+MXP+LIN origins, Jul-Sep 2026, max 60 EUR, economy, 2-3 night weekends
+  # Default: BGY+MXP+LIN → Europe, Jul-Sep 2026, no budget cap, economy, weekends
   python flisearch.py
 
-  # Single destination, no budget cap, business class, roundtrip
-  python flisearch.py --origins BGY --dest BCN --mode roundtrip --no-budget --cabin business
+  # Single destination, business class, roundtrip, no budget cap
+  python flisearch.py --origins BGY --dest BCN --mode roundtrip --cabin business
 
-  # BGY only, August, max 80 EUR, 5-7 nights, Friday departures
-  python flisearch.py --origins BGY --from 2026-08-01 --to 2026-08-31 --max 80 --nights 5 7 --dep-days 4
+  # BGY only, August, max €80, 5-7 nights, Friday departures
+  python flisearch.py --origins BGY --from 2026-08-01 --to 2026-08-31 \
+      --max 80 --nights 5 7 --dep-days 4
 
-  # Long-haul, economy, up to 2 weeks, no budget cap
-  python flisearch.py --dest JFK --mode roundtrip --nights 7 14 --no-budget
+  # Long-haul to New York, up to 2 weeks, roundtrip pricing
+  python flisearch.py --dest JFK --mode roundtrip --nights 7 14
 
-  # One-way only, max 50 EUR
-  python flisearch.py --dest BCN --mode oneway --max 50 --from 2026-07-01 --to 2026-07-31
+  # One-way scan to multiple destinations, max €50, July
+  python flisearch.py --dest BCN LIS MAD --mode oneway --max 50 \
+      --from 2026-07-01 --to 2026-07-31
 
-  # Use more parallel workers for faster scanning (careful: may trigger rate limits)
-  python flisearch.py --workers 8
+  # Scan Africa + Asia, no budget cap, 8 parallel workers
+  python flisearch.py --region africa asia --workers 8
+
+  # Worldwide scan, business class, 7-10 nights, roundtrip
+  python flisearch.py --region world --cabin business --mode roundtrip --nights 7 10
+
+  # Show full airport names in output
+  python flisearch.py --dest BCN --airport-names
+
+  # Fixed trip: depart 2026-06-01, return 2026-06-10, roundtrip
+  python flisearch.py --origins MXP --dest HKG --from 2026-06-01 --to 2026-06-10 \
+      --mode roundtrip --cabin economy
 """
 
 import csv
@@ -81,13 +132,48 @@ DEFAULT_TRIP_SCHEMES = [
 ]
 
 # Known airline name mapping bugs in the fli library.
-# The IATA code is correct; the display name is wrong (e.g. W4 maps to "LC Péru"
-# instead of the actual European carrier). Flight numbers are reliable.
+# The Airline enum has an alias bug: codes with duplicate names silently collapse
+# into the first enum member with that value, returning a wrong name.
+# We correct the most common cases here. Flight numbers are always reliable.
 AIRLINE_NAME_FIXES = {
-    "LC Péru":               "⚠️ W4 (verify on Google Flights)",
+    "LC Péru":               "Wizz Air Malta (W4)",   # W4 → alias of W6 in fli enum
     "Peruvian Airlines":     "⚠️ P9 (verify on Google Flights)",
     "Viva Airlines Peru":    "⚠️ VV (verify on Google Flights)",
     "Eastern Airlines, LLC": "⚠️ 2D (verify on Google Flights)",
+}
+
+# Curated IATA code → display name for --airlines and --exclude-airlines resolution
+# Covers the most common carriers. Unknown codes fall back to the Airline enum value.
+AIRLINE_DISPLAY_NAMES: dict[str, str] = {
+    "FR": "Ryanair", "U2": "easyJet", "VY": "Vueling", "V7": "Volotea",
+    "W6": "Wizz Air", "W4": "Wizz Air Malta", "W9": "Wizz Air UK",
+    "AF": "Air France", "KL": "KLM", "LH": "Lufthansa", "LX": "Swiss",
+    "OS": "Austrian Airlines", "SN": "Brussels Airlines", "EW": "Eurowings",
+    "BA": "British Airways", "IB": "Iberia", "AZ": "ITA Airways",
+    "TK": "Turkish Airlines", "EK": "Emirates", "QR": "Qatar Airways",
+    "EY": "Etihad", "SQ": "Singapore Airlines", "CX": "Cathay Pacific",
+    "NH": "ANA", "JL": "Japan Airlines", "KE": "Korean Air",
+    "OZ": "Asiana Airlines", "CA": "Air China", "MU": "China Eastern",
+    "CZ": "China Southern", "AI": "Air India", "TG": "Thai Airways",
+    "MH": "Malaysia Airlines", "GA": "Garuda Indonesia",
+    "UA": "United Airlines", "AA": "American Airlines", "DL": "Delta Air Lines",
+    "AC": "Air Canada", "AM": "Aeromexico", "LA": "LATAM Airlines",
+    "G3": "GOL", "AD": "Azul", "JJ": "LATAM Brasil",
+    "SK": "SAS", "AY": "Finnair", "LO": "LOT Polish", "OK": "Czech Airlines",
+    "OU": "Croatia Airlines", "JP": "Adria Airways",
+    "SA": "South African Airways", "ET": "Ethiopian Airlines",
+    "AT": "Royal Air Maroc", "MS": "EgyptAir",
+    "QF": "Qantas", "NZ": "Air New Zealand",
+}
+
+# Alliance filter — uses fli's native Airline enum alliance values.
+# Passing Airline.STAR_ALLIANCE (etc.) to FlightSearchFilters.airlines tells
+# Google Flights to filter by alliance directly — no manual expansion needed.
+from fli.models import Airline as _AirlineEnum
+ALLIANCE_MAP: dict[str, "_AirlineEnum"] = {
+    "star":     _AirlineEnum.STAR_ALLIANCE,
+    "oneworld": _AirlineEnum.ONEWORLD,
+    "skyteam":  _AirlineEnum.SKYTEAM,
 }
 
 # Airports grouped by world region.
@@ -232,27 +318,42 @@ def tprint(*args, **kwargs):
         print(*args, **kwargs)
 
 
-def cached_search_one_way(origin, dest, travel_date, time_window, seat_type):
+def cached_search_one_way(origin, dest, travel_date, time_window, seat_type,
+                          airlines=None, exclude_airlines=None):
     """
     One-way search with in-memory cache.
-    Identical (origin, dest, date, window, cabin) calls within the same run
-    are served from cache — avoids redundant HTTP requests when the same
-    outbound date appears across multiple night-length combinations.
+    airlines: Airline enum list to include (passed to Google Flights API).
+    exclude_airlines: set of airline IATA name strings to filter out client-side.
+    Cache key includes airlines so different filters don't collide.
     """
-    key = (origin, dest, travel_date, time_window, seat_type)
+    airlines_key = tuple(sorted(a.name for a in airlines)) if airlines else ()
+    key = (origin, dest, travel_date, time_window, seat_type, airlines_key)
     with _cache_lock:
         if key in _cache:
-            return _cache[key]
+            results = _cache[key]
+        else:
+            results = _search_one_way_http(origin, dest, travel_date, time_window,
+                                           seat_type, airlines=airlines)
+            with _cache_lock:
+                _cache[key] = results
 
-    result = _search_one_way_http(origin, dest, travel_date, time_window, seat_type)
+    # Client-side exclusion filter
+    if exclude_airlines and results:
+        results = [
+            f for f in results
+            if not f.legs or
+            (f.legs[0].airline.name not in exclude_airlines)
+        ]
+    return results
 
-    with _cache_lock:
-        _cache[key] = result
-    return result
 
+def _search_one_way_http(origin, dest, travel_date, time_window, seat_type,
+                         airlines=None):
+    """Raw HTTP call for a single one-way flight.
 
-def _search_one_way_http(origin, dest, travel_date, time_window, seat_type):
-    """Raw HTTP call for a single one-way flight."""
+    airlines: list of Airline enum members to filter by (include-only).
+    Exclude-airline filtering is applied client-side after results arrive.
+    """
     try:
         seg_kwargs = dict(
             departure_airport=[[origin, 0]],
@@ -269,6 +370,7 @@ def _search_one_way_http(origin, dest, travel_date, time_window, seat_type):
             stops=MaxStops.ANY,
             sort_by=SortBy.CHEAPEST,
             trip_type=TripType.ONE_WAY,
+            airlines=airlines if airlines else None,
         )
         return SearchFlights().search(filters) or []
     except Exception:
@@ -293,6 +395,7 @@ def _search_round_trip_http(origin, dest, dep_date, ret_date, out_window, ret_wi
             stops=MaxStops.ANY,
             sort_by=SortBy.CHEAPEST,
             trip_type=TripType.ROUND_TRIP,
+            airlines=airlines if airlines else None,
         )
         outbound_results = SearchFlights().search(filters_out, top_n=1) or []
 
@@ -348,14 +451,19 @@ def make_segment(origin, dest, travel_date, time_window_str, selected_flight=Non
     return FlightSegment(**seg)
 
 
-def format_flight(flight):
-    """Extract display fields from a FlightResult, applying known airline name fixes."""
+def format_flight(flight, price_override=None):
+    """Extract display fields from a FlightResult, applying known airline name fixes.
+
+    price_override: use this price instead of flight.price (useful in combined mode
+    where the per-leg price may be None and the total is computed externally).
+    """
     if not flight or not flight.legs:
         return None
     leg = flight.legs[0]
     airline_raw = leg.airline.value if hasattr(leg.airline, "value") else str(leg.airline)
+    price = price_override if price_override is not None else flight.price
     return {
-        "price":         flight.price,
+        "price":         price,
         "airline":       AIRLINE_NAME_FIXES.get(airline_raw, airline_raw),
         "airline_raw":   airline_raw,
         "flight_number": leg.flight_number or "",
@@ -366,7 +474,17 @@ def format_flight(flight):
     }
 
 
-def print_result(r, mode):
+def ap(code, use_names):
+    """Return full airport name if --airport-names is on, otherwise the IATA code."""
+    if not use_names:
+        return code
+    try:
+        return f"{Airport[code].value} ({code})"
+    except KeyError:
+        return code
+
+
+def print_result(r, mode, use_names=False):
     """Pretty-print a single result entry."""
     o = r["out"]
     rt = r["ret"]
@@ -375,14 +493,17 @@ def print_result(r, mode):
     mode_tag = " [RT]" if mode == "roundtrip" else (" [OW]" if mode == "oneway" else "")
     price_str = f"€{r['total']:.0f}" if r["total"] is not None else "€?"
     label = "PRICE" if mode == "oneway" else "TOTAL"
+    origin_str = ap(r['origin'], use_names)
+    dest_str   = ap(r['dest'],   use_names)
+    ret_ap_str = ap(r['ret_ap'], use_names) if r['ret_ap'] else ""
     tprint(f"💶 {label} {price_str}  [{r['label']}]{mode_tag}{warn_tag}")
     tprint(f"   ✈  OUT    {r['dep_date'].strftime('%a %d/%m')}  "
-           f"{r['origin']} → {r['dest']}  "
+           f"{origin_str} → {dest_str}  "
            f"{o['dep_time']} → {o['arr_time']}  {o['airline']} {o['flight_number']}  "
            f"€{o['price']:.0f}  ({o['stops']} stop{'s' if o['stops'] != 1 else ''})")
     if rt:
         tprint(f"   ↩  RET    {r['ret_date'].strftime('%a %d/%m')}  "
-               f"{r['dest']} → {r['ret_ap']}  "
+               f"{dest_str} → {ret_ap_str}  "
                f"{rt['dep_time']} → {rt['arr_time']}  {rt['airline']} {rt['flight_number']}  "
                f"€{rt['price']:.0f}  ({rt['stops']} stop{'s' if rt['stops'] != 1 else ''})")
     tprint()
@@ -392,8 +513,10 @@ def print_result(r, mode):
 #  Per-task search functions (one unit of work for the thread pool)
 # ══════════════════════════════════════════════════════════════
 
-def task_oneway(origin, dest, dep_date, out_w, label, seat_type, max_eur):
-    flights = cached_search_one_way(origin, dest, dep_date, out_w, seat_type)
+def task_oneway(origin, dest, dep_date, out_w, label, seat_type, max_eur,
+                airlines=None, exclude_airlines=None):
+    flights = cached_search_one_way(origin, dest, dep_date, out_w, seat_type,
+                                    airlines=airlines, exclude_airlines=exclude_airlines)
     if not flights:
         return None
     best = flights[0]
@@ -409,8 +532,16 @@ def task_oneway(origin, dest, dep_date, out_w, label, seat_type, max_eur):
     }
 
 
-def task_roundtrip(origin, dest, dep_date, ret_date, out_w, ret_w, label, seat_type, max_eur):
+def task_roundtrip(origin, dest, dep_date, ret_date, out_w, ret_w, label, seat_type, max_eur,
+                   airlines=None, exclude_airlines=None):
     pairs = _search_round_trip_http(origin, dest, dep_date, ret_date, out_w, ret_w, seat_type)
+    # Apply client-side exclude filter to roundtrip pairs
+    if exclude_airlines and pairs:
+        pairs = [
+            (o, r) for o, r in pairs
+            if (not o.legs or o.legs[0].airline.name not in exclude_airlines)
+            and (not r.legs or r.legs[0].airline.name not in exclude_airlines)
+        ]
     for out_flight, ret_flight in pairs[:1]:
         o = format_flight(out_flight)
         r = format_flight(ret_flight)
@@ -428,13 +559,15 @@ def task_roundtrip(origin, dest, dep_date, ret_date, out_w, ret_w, label, seat_t
 
 
 def task_combined(origin, dest, dep_date, ret_date, out_w, ret_w, label,
-                  seat_type, max_eur, all_origins):
+                  seat_type, max_eur, all_origins,
+                  airlines=None, exclude_airlines=None):
     """
     Search outbound + best return across all origin airports in parallel.
     The outbound is fetched first; if it already exceeds budget the return
     calls are skipped entirely.
     """
-    out_flights = cached_search_one_way(origin, dest, dep_date, out_w, seat_type)
+    out_flights = cached_search_one_way(origin, dest, dep_date, out_w, seat_type,
+                                          airlines=airlines, exclude_airlines=exclude_airlines)
     if not out_flights:
         return None
     best_out = out_flights[0]
@@ -448,7 +581,8 @@ def task_combined(origin, dest, dep_date, ret_date, out_w, ret_w, label,
 
     with ThreadPoolExecutor(max_workers=len(all_origins)) as inner:
         futs = {
-            inner.submit(cached_search_one_way, dest, ret_ap, ret_date, ret_w, seat_type): ret_ap
+            inner.submit(cached_search_one_way, dest, ret_ap, ret_date, ret_w, seat_type,
+                         airlines, exclude_airlines): ret_ap
             for ret_ap in all_origins
         }
         for fut in as_completed(futs):
@@ -462,12 +596,15 @@ def task_combined(origin, dest, dep_date, ret_date, out_w, ret_w, label,
     if best_ret is None or best_ret.price is None:
         return None
 
-    total = best_out.price + best_ret.price
+    # Use explicit prices: some carriers return None on flight.price for individual legs
+    price_out = best_out.price or 0
+    price_ret = best_ret.price or 0
+    total = price_out + price_ret
     if max_eur and total > max_eur:
         return None
 
-    o = format_flight(best_out)
-    r = format_flight(best_ret)
+    o = format_flight(best_out, price_override=price_out)
+    r = format_flight(best_ret, price_override=price_ret)
     if not o or not r:
         return None
     return {
@@ -543,6 +680,23 @@ def parse_args():
                         "Increase for speed, decrease if you hit rate limits.")
     p.add_argument("--output", default="results.csv", metavar="FILE",
                    help="CSV output filename (default: results.csv)")
+    p.add_argument("--airport-names", action="store_true", default=False,
+                   help="Show full airport names instead of IATA codes in results "
+                        "(e.g. 'Barcelona International Airport' instead of 'BCN'). "
+                        "Default: off (IATA codes only).")
+
+    # Airline / alliance filters
+    p.add_argument("--airlines", nargs="+", default=None, metavar="IATA",
+                   help="Only show results with these airlines (IATA codes) e.g. --airlines FR U2 VY. "
+                        "Mutually exclusive with --exclude-airlines.")
+    p.add_argument("--exclude-airlines", nargs="+", default=None, metavar="IATA",
+                   help="Exclude results with these airlines (IATA codes) e.g. --exclude-airlines FR. "
+                        "Mutually exclusive with --airlines.")
+    p.add_argument("--alliance", default=None,
+                   choices=["star", "oneworld", "skyteam"],
+                   help="Filter to a specific alliance: star (Star Alliance: LH UA SQ TK…), "
+                        "oneworld (BA AA QR JL…), skyteam (AF KL DL…). "
+                        "Expands to individual airline codes. Mutually exclusive with --exclude-airlines.")
     return p.parse_args()
 
 
@@ -579,8 +733,62 @@ def main():
     max_eur = args.max  # None if not set
     seat_type   = CABIN_MAP[args.cabin]
     cabin_label = CABIN_LABEL[args.cabin]
-    mode        = args.mode
-    workers     = max(1, args.workers)
+    mode         = args.mode
+    workers      = max(1, args.workers)
+    airport_names = args.airport_names
+
+    # ── Airline / alliance filter resolution ──────────────────────────────
+    from fli.models import Airline as AirlineEnum
+    _valid_airline_codes = {a.name for a in AirlineEnum}  # includes STAR_ALLIANCE etc.
+
+    def resolve_airline_codes(codes):
+        """Convert IATA code strings to Airline enum members, warn on unknowns."""
+        result = []
+        for c in [x.upper() for x in (codes or [])]:
+            if c in _valid_airline_codes:
+                result.append(AirlineEnum[c])
+            else:
+                print(f"⚠️  Unknown airline code '{c}' — skipped.")
+        return result or None
+
+    # Validate mutual exclusivity
+    if args.airlines and args.exclude_airlines:
+        print("❌ --airlines and --exclude-airlines cannot be used together.")
+        return
+    if args.alliance and args.exclude_airlines:
+        print("❌ --alliance and --exclude-airlines cannot be used together.")
+        return
+    if args.alliance and args.airlines:
+        print("❌ --alliance and --airlines cannot be used together.")
+        return
+
+    # Resolve include list
+    filter_airlines = None
+    if args.alliance:
+        # Use fli's native alliance enum value — passed directly to Google Flights API
+        alliance_enum = ALLIANCE_MAP.get(args.alliance)
+        if alliance_enum:
+            filter_airlines = [alliance_enum]
+            alliance_labels = {
+                "star":     "Star Alliance (LH, UA, SQ, TK, AC, NH…)",
+                "oneworld": "oneworld (BA, AA, QR, JL, QF, IB…)",
+                "skyteam":  "SkyTeam (AF, KL, DL, KE, MU, CZ…)",
+            }
+            print(f"🤝  Alliance: {alliance_labels.get(args.alliance, args.alliance)}")
+    elif args.airlines:
+        filter_airlines = resolve_airline_codes(args.airlines)
+        if filter_airlines:
+            names = [AIRLINE_DISPLAY_NAMES.get(c.upper(), c.upper()) for c in args.airlines]
+            print(f"✈   Airline filter: {', '.join(names)}")
+
+    # Resolve exclude list (client-side only — Google Flights has no native exclude)
+    exclude_airlines = None
+    if args.exclude_airlines:
+        exclude_airlines_enum = resolve_airline_codes(args.exclude_airlines)
+        exclude_airlines = {a.name for a in (exclude_airlines_enum or [])}
+        if exclude_airlines:
+            names = [AIRLINE_DISPLAY_NAMES.get(c.upper(), c.upper()) for c in args.exclude_airlines]
+            print(f"🚫  Excluding airlines: {', '.join(names)}")
 
     # Destinations
     if args.dest:
@@ -698,22 +906,45 @@ def main():
     print(f"🔄  Mode:         {mode_labels[mode]}")
     print(f"⚡  Workers:      {workers} parallel threads")
     print(f"🔢  Total tasks:  {total_tasks}")
+    if filter_airlines and not args.alliance:
+        al_names = [AIRLINE_DISPLAY_NAMES.get(a.name, a.value) for a in filter_airlines]
+        print(f"✈   Airlines:     {', '.join(al_names)}")
+    if exclude_airlines:
+        ex_names = [AIRLINE_DISPLAY_NAMES.get(c, c) for c in exclude_airlines]
+        print(f"🚫  Excluding:     {', '.join(ex_names)}")
     print(f"⚠️   Always verify prices on Google Flights before booking.\n")
 
     results_found = []
     completed = 0
     lock = threading.Lock()
 
+    # Open CSV immediately so rows are written as results arrive
+    out_file = args.output
+    csv_file = open(out_file, "w", newline="", encoding="utf-8")
+    csv_writer = csv.writer(csv_file)
+    csv_writer.writerow([
+        "Total (EUR)", "Mode", "Cabin", "Label",
+        "Dep Date", "Ret Date",
+        "Origin", "Destination", "Return Airport",
+        "Airline Out", "Flight Out", "Dep Out", "Arr Out", "Price Out (EUR)",
+        "Airline Ret", "Flight Ret", "Dep Ret", "Arr Ret", "Price Ret (EUR)",
+        "Warning",
+    ])
+    csv_file.flush()
+
     def run_task(task):
         origin, dest, dep_date, ret_date, out_w, ret_w, label = task
         if mode == "oneway":
-            return task_oneway(origin, dest, dep_date, out_w, label, seat_type, max_eur)
+            return task_oneway(origin, dest, dep_date, out_w, label, seat_type, max_eur,
+                               airlines=filter_airlines, exclude_airlines=exclude_airlines)
         elif mode == "roundtrip":
             return task_roundtrip(origin, dest, dep_date, ret_date, out_w, ret_w,
-                                  label, seat_type, max_eur)
+                                  label, seat_type, max_eur,
+                                  airlines=filter_airlines, exclude_airlines=exclude_airlines)
         else:
             return task_combined(origin, dest, dep_date, ret_date, out_w, ret_w,
-                                 label, seat_type, max_eur, origins)
+                                 label, seat_type, max_eur, origins,
+                                 airlines=filter_airlines, exclude_airlines=exclude_airlines)
 
     with ThreadPoolExecutor(max_workers=workers) as executor:
         futures = {executor.submit(run_task, task): task for task in tasks}
@@ -727,6 +958,23 @@ def main():
                 with lock:
                     results_found.append(entry)
                     count = len(results_found)
+                    # Write CSV row immediately
+                    _o = entry["out"]; _rt = entry["ret"]
+                    csv_writer.writerow([
+                        f"{entry['total']:.0f}", mode, cabin_label, entry["label"],
+                        entry["dep_date"].strftime("%Y-%m-%d"),
+                        entry["ret_date"].strftime("%Y-%m-%d") if entry["ret_date"] else "",
+                        entry["origin"], entry["dest"], entry["ret_ap"] or "",
+                        _o["airline_raw"], _o["flight_number"], _o["dep_time"], _o["arr_time"],
+                        f"{_o['price']:.0f}" if _o["price"] is not None else "",
+                        _rt["airline_raw"] if _rt else "",
+                        _rt["flight_number"] if _rt else "",
+                        _rt["dep_time"] if _rt else "",
+                        _rt["arr_time"] if _rt else "",
+                        f"{_rt['price']:.0f}" if (_rt and _rt["price"] is not None) else "",
+                        "CHECK" if (_o["has_warning"] or (_rt["has_warning"] if _rt else False)) else "",
+                    ])
+                    csv_file.flush()
                 o = entry["out"]
                 r = entry["ret"]
                 warn = " ⚠️" if (o["has_warning"] or (r["has_warning"] if r else False)) else ""
@@ -749,6 +997,8 @@ def main():
                 if completed % max(1, total_tasks // 20) == 0:
                     tprint(f"   … {completed}/{total_tasks} tasks ({pct}%)", flush=True)
 
+    csv_file.close()
+
     # Final summary
     print(f"\n{'═' * 70}")
     budget_tag = f"under €{max_eur:.0f}" if max_eur else "found"
@@ -760,7 +1010,7 @@ def main():
     warn_count = 0
 
     for r in results_found:
-        print_result(r, mode)
+        print_result(r, mode, use_names=airport_names)
         if r["out"]["has_warning"] or (r["ret"]["has_warning"] if r["ret"] else False):
             warn_count += 1
 
@@ -769,36 +1019,7 @@ def main():
         print(f"    The flight number is reliable — search it on Google Flights to find the "
               f"real carrier.\n")
 
-    if results_found:
-        out_file = args.output
-        with open(out_file, "w", newline="", encoding="utf-8") as f:
-            w = csv.writer(f)
-            w.writerow([
-                "Total (EUR)", "Mode", "Cabin", "Label",
-                "Dep Date", "Ret Date",
-                "Origin", "Destination", "Return Airport",
-                "Airline Out", "Flight Out", "Dep Out", "Arr Out", "Price Out (EUR)",
-                "Airline Ret", "Flight Ret", "Dep Ret", "Arr Ret", "Price Ret (EUR)",
-                "Warning",
-            ])
-            for r in results_found:
-                o = r["out"]
-                rt = r["ret"]
-                w.writerow([
-                    f"{r['total']:.0f}", mode, cabin_label, r["label"],
-                    r["dep_date"].strftime("%Y-%m-%d"),
-                    r["ret_date"].strftime("%Y-%m-%d") if r["ret_date"] else "",
-                    r["origin"], r["dest"], r["ret_ap"] or "",
-                    o["airline_raw"], o["flight_number"], o["dep_time"], o["arr_time"],
-                    f"{o['price']:.0f}",
-                    rt["airline_raw"] if rt else "",
-                    rt["flight_number"] if rt else "",
-                    rt["dep_time"] if rt else "",
-                    rt["arr_time"] if rt else "",
-                    f"{rt['price']:.0f}" if rt else "",
-                    "CHECK" if (o["has_warning"] or (rt["has_warning"] if rt else False)) else "",
-                ])
-        print(f"📄  Results saved to {out_file}")
+    print(f"📄  Results saved to {out_file}")
 
 
 if __name__ == "__main__":

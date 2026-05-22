@@ -66,7 +66,22 @@ python flightsearch.py --help
 | `--mode MODE` | `combined` \| `roundtrip` \| `oneway` (see below) | `combined` |
 | `--workers N` | Parallel search threads. Increase for speed, reduce if rate-limited | `4` |
 | `--output FILE` | CSV output filename | `results.csv` |
+| `--airport-names` | Show full airport names in results instead of IATA codes e.g. `Barcelona International Airport (BCN)` | off |
+| `--airlines IATA [...]` | Only show results operated by these airlines e.g. `--airlines FR U2 VY`. Mutually exclusive with `--exclude-airlines` | — |
+| `--exclude-airlines IATA [...]` | Exclude results operated by these airlines e.g. `--exclude-airlines FR`. Mutually exclusive with `--airlines` | — |
+| `--alliance NAME` | Filter to a single alliance: `star` \| `oneworld` \| `skyteam`. Uses Google Flights' native alliance filter — no manual expansion. Mutually exclusive with `--airlines` | — |
 
+
+
+### Alliances (`--alliance`)
+
+Alliance filtering is passed natively to the Google Flights API via the `fli` library — no client-side expansion. This means results respect Google Flights' own alliance membership data.
+
+| Value | Members (examples) |
+|---|---|
+| `star` | Lufthansa (LH), United (UA), Singapore Airlines (SQ), Turkish Airlines (TK), Air Canada (AC), ANA (NH), Asiana (OZ), TAP (TP), LOT (LO), Swiss (LX), Austrian (OS), Brussels (SN), SAS (SK), Finnair (AY), Air China (CA), Air India (AI) and more |
+| `oneworld` | British Airways (BA), American Airlines (AA), Qatar Airways (QR), Japan Airlines (JL), Qantas (QF), Iberia (IB), Cathay Pacific (CX), LATAM (LA), Royal Jordanian (RJ), Finnair (AY), Royal Air Maroc (AT) and more |
+| `skyteam` | Air France (AF), KLM (KL), Delta (DL), Korean Air (KE), China Eastern (MU), China Southern (CZ), Aeromexico (AM), Alitalia/ITA (AZ), Garuda (GA), Vietnam Airlines (VN), Saudia (SV) and more |
 
 ### Regions (`--region`)
 
@@ -123,6 +138,102 @@ python flightsearch.py --workers 8
 
 # Slower but safer if Google Flights rate-limits you
 python flightsearch.py --workers 2
+
+# Only Ryanair and easyJet flights
+python flightsearch.py --airlines FR U2
+
+# Exclude Ryanair
+python flightsearch.py --region europe --exclude-airlines FR
+
+# Star Alliance only, business class, long-haul
+python flightsearch.py --dest JFK --alliance star --cabin business --mode roundtrip --nights 7 10
+
+# Show full airport names in results
+python flightsearch.py --dest BCN --airport-names
+```
+
+
+### Practical Examples
+
+#### All economy flights from Milan airports to Europe, Friday evening departures, back Sunday, next 2 months, max €60
+
+```bash
+# Calculate "next 2 months" from today — adjust dates accordingly
+python flightsearch.py \
+  --origins BGY MXP LIN \
+  --region europe \
+  --from 2026-06-01 --to 2026-07-31 \
+  --dep-days 4 \
+  --time-out 18-23 \
+  --time-ret 8-23 \
+  --nights 2 2 \
+  --cabin economy \
+  --mode combined \
+  --max 60
+```
+
+#### Weekend city break (Thu evening → Sun) from BGY, economy, summer 2026
+
+```bash
+python flightsearch.py \
+  --origins BGY \
+  --region europe \
+  --from 2026-06-01 --to 2026-08-31 \
+  --dep-days 3 \
+  --time-out 18-23 \
+  --nights 3 3 \
+  --cabin economy \
+  --max 80
+```
+
+#### Long weekend (Fri evening → Mon) to any European destination, no budget cap
+
+```bash
+python flightsearch.py \
+  --origins BGY MXP LIN \
+  --region europe \
+  --from 2026-07-01 --to 2026-09-30 \
+  --dep-days 4 --time-out 18-23 \
+  --nights 3 3 \
+  --mode combined \
+  --airport-names
+```
+
+#### Business class round-trip to Asia with Star Alliance, 1 week, no budget cap
+
+```bash
+python flightsearch.py \
+  --origins MXP \
+  --region asia \
+  --from 2026-09-01 --to 2026-09-30 \
+  --nights 7 7 \
+  --cabin business \
+  --mode roundtrip \
+  --alliance star
+```
+
+#### Fixed dates trip: Milan → Hong Kong, depart 1 June, return 10 June, economy roundtrip
+
+```bash
+python flightsearch.py \
+  --origins MXP \
+  --dest HKG \
+  --from 2026-06-01 --to 2026-06-10 \
+  --cabin economy \
+  --mode roundtrip
+```
+
+#### Worldwide scan for cheap one-way flights on any Friday in August, max €100
+
+```bash
+python flightsearch.py \
+  --origins BGY MXP LIN \
+  --region world \
+  --from 2026-08-01 --to 2026-08-31 \
+  --dep-days 4 \
+  --mode oneway \
+  --max 100 \
+  --workers 8
 ```
 
 ### Output
@@ -133,6 +244,13 @@ Results print to the terminal in real time and are saved to a CSV file:
 💶 TOTAL €54  [3n Fri→Mon]
    ✈  OUT    Fri 03/07  BGY → BCN  18:40 → 20:45  Ryanair FR1234  €29  (0 stops)
    ↩  RET    Mon 06/07  BCN → MXP  07:15 → 09:20  Vueling VY6012  €25  (0 stops)
+```
+
+With `--airport-names`:
+```
+💶 TOTAL €54  [3n Fri→Mon]
+   ✈  OUT    Fri 03/07  Bergamo / Orio Al Serio Airport (BGY) → Barcelona International Airport (BCN)  18:40 → 20:45  Ryanair FR1234  €29  (0 stops)
+   ↩  RET    Mon 06/07  Barcelona International Airport (BCN) → Malpensa International Airport (MXP)  07:15 → 09:20  Vueling VY6012  €25  (0 stops)
 ```
 
 CSV columns: `Total (EUR)`, `Mode`, `Cabin`, `Label`, `Dep Date`, `Ret Date`, `Origin`, `Destination`, `Return Airport`, `Airline Out`, `Flight Out`, `Dep Out`, `Arr Out`, `Price Out (EUR)`, `Airline Ret`, `Flight Ret`, `Dep Ret`, `Arr Ret`, `Price Ret (EUR)`, `Warning`.
@@ -207,7 +325,22 @@ python flightsearch.py --help
 | `--mode MODALITA` | `combined` \| `roundtrip` \| `oneway` (vedi sotto) | `combined` |
 | `--workers N` | Thread di ricerca paralleli. Aumenta per velocità, riduci in caso di rate limit | `4` |
 | `--output FILE` | Nome file CSV output | `results.csv` |
+| `--airport-names` | Mostra i nomi estesi degli aeroporti nei risultati invece dei codici IATA es. `Barcelona International Airport (BCN)` | disattivo |
+| `--airlines IATA [...]` | Mostra solo i risultati operati da queste compagnie es. `--airlines FR U2 VY`. Non combinabile con `--exclude-airlines` | — |
+| `--exclude-airlines IATA [...]` | Esclude i risultati operati da queste compagnie es. `--exclude-airlines FR`. Non combinabile con `--airlines` | — |
+| `--alliance NOME` | Filtra per alleanza: `star` \| `oneworld` \| `skyteam`. Usa il filtro alleanza nativo di Google Flights. Non combinabile con `--airlines` | — |
 
+
+
+### Alleanze (`--alliance`)
+
+Il filtro per alleanza viene passato nativamente all'API di Google Flights tramite la libreria `fli` — senza espansione manuale. I risultati rispettano i dati di appartenenza all'alleanza di Google Flights.
+
+| Valore | Membri (esempi) |
+|---|---|
+| `star` | Lufthansa (LH), United (UA), Singapore Airlines (SQ), Turkish Airlines (TK), Air Canada (AC), ANA (NH), Asiana (OZ), TAP (TP), LOT (LO), Swiss (LX), Austrian (OS), Brussels Airlines (SN), SAS (SK), Finnair (AY), Air China (CA), Air India (AI) e altri |
+| `oneworld` | British Airways (BA), American Airlines (AA), Qatar Airways (QR), Japan Airlines (JL), Qantas (QF), Iberia (IB), Cathay Pacific (CX), LATAM (LA), Royal Jordanian (RJ), Finnair (AY), Royal Air Maroc (AT) e altri |
+| `skyteam` | Air France (AF), KLM (KL), Delta (DL), Korean Air (KE), China Eastern (MU), China Southern (CZ), Aeromexico (AM), Alitalia/ITA (AZ), Garuda (GA), Vietnam Airlines (VN), Saudia (SV) e altri |
 
 ### Regioni (`--region`)
 
@@ -264,6 +397,102 @@ python flightsearch.py --workers 8
 
 # Slower but safer if Google Flights rate-limits you
 python flightsearch.py --workers 2
+
+# Only Ryanair and easyJet flights
+python flightsearch.py --airlines FR U2
+
+# Exclude Ryanair
+python flightsearch.py --region europe --exclude-airlines FR
+
+# Star Alliance only, business class, long-haul
+python flightsearch.py --dest JFK --alliance star --cabin business --mode roundtrip --nights 7 10
+
+# Show full airport names in results
+python flightsearch.py --dest BCN --airport-names
+```
+
+
+### Esempi pratici
+
+#### Tutti i voli economy dagli scali milanesi verso tutta Europa, partenza venerdì sera, rientro domenica, prossimi 2 mesi, max €60
+
+```bash
+# Adatta le date in base alla data odierna
+python flightsearch.py \
+  --origins BGY MXP LIN \
+  --region europe \
+  --from 2026-06-01 --to 2026-07-31 \
+  --dep-days 4 \
+  --time-out 18-23 \
+  --time-ret 8-23 \
+  --nights 2 2 \
+  --cabin economy \
+  --mode combined \
+  --max 60
+```
+
+#### Weekend in città (gio sera → dom) da BGY, economy, estate 2026
+
+```bash
+python flightsearch.py \
+  --origins BGY \
+  --region europe \
+  --from 2026-06-01 --to 2026-08-31 \
+  --dep-days 3 \
+  --time-out 18-23 \
+  --nights 3 3 \
+  --cabin economy \
+  --max 80
+```
+
+#### Weekend lungo (ven sera → lun) verso qualsiasi destinazione europea, nessun limite di budget
+
+```bash
+python flightsearch.py \
+  --origins BGY MXP LIN \
+  --region europe \
+  --from 2026-07-01 --to 2026-09-30 \
+  --dep-days 4 --time-out 18-23 \
+  --nights 3 3 \
+  --mode combined \
+  --airport-names
+```
+
+#### Business class A/R in Asia con Star Alliance, 1 settimana, nessun limite di budget
+
+```bash
+python flightsearch.py \
+  --origins MXP \
+  --region asia \
+  --from 2026-09-01 --to 2026-09-30 \
+  --nights 7 7 \
+  --cabin business \
+  --mode roundtrip \
+  --alliance star
+```
+
+#### Date fisse: Milano → Hong Kong, partenza 1 giugno, ritorno 10 giugno, economy roundtrip
+
+```bash
+python flightsearch.py \
+  --origins MXP \
+  --dest HKG \
+  --from 2026-06-01 --to 2026-06-10 \
+  --cabin economy \
+  --mode roundtrip
+```
+
+#### Scansione mondiale per voli solo andata economici ogni venerdì di agosto, max €100
+
+```bash
+python flightsearch.py \
+  --origins BGY MXP LIN \
+  --region world \
+  --from 2026-08-01 --to 2026-08-31 \
+  --dep-days 4 \
+  --mode oneway \
+  --max 100 \
+  --workers 8
 ```
 
 ### Output
@@ -274,6 +503,13 @@ I risultati vengono stampati in tempo reale e salvati in un file CSV:
 💶 TOTALE €54  [3n Ven→Lun]
    ✈  OUT    Fri 03/07  BGY → BCN  18:40 → 20:45  Ryanair FR1234  €29  (0 stop)
    ↩  RET    Mon 06/07  BCN → MXP  07:15 → 09:20  Vueling VY6012  €25  (0 stop)
+```
+
+Con `--airport-names`:
+```
+💶 TOTALE €54  [3n Ven→Lun]
+   ✈  OUT    Fri 03/07  Bergamo / Orio Al Serio Airport (BGY) → Barcelona International Airport (BCN)  18:40 → 20:45  Ryanair FR1234  €29  (0 stop)
+   ↩  RET    Mon 06/07  Barcelona International Airport (BCN) → Malpensa International Airport (MXP)  07:15 → 09:20  Vueling VY6012  €25  (0 stop)
 ```
 
 Colonne CSV: `Total (EUR)`, `Mode`, `Cabin`, `Label`, `Dep Date`, `Ret Date`, `Origin`, `Destination`, `Return Airport`, `Airline Out`, `Flight Out`, `Dep Out`, `Arr Out`, `Price Out (EUR)`, `Airline Ret`, `Flight Ret`, `Dep Ret`, `Arr Ret`, `Price Ret (EUR)`, `Warning`.
