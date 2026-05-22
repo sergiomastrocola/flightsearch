@@ -35,12 +35,15 @@ All options:
 
   Cabin & mode:
     --cabin CLASS             economy (default) | premium_economy | business | first
-    --mode  MODE              combined (default) | roundtrip | oneway
+    --mode  MODE              combined (default) | roundtrip | oneway | bestprice
                               combined  = two separate one-ways; best for low-cost,
                                           allows different airports per leg.
                               roundtrip = native RT ticket; better for traditional
                                           carriers where A/R < 2x one-way.
                               oneway    = outbound only; --nights ignored.
+                              bestprice = runs both combined AND roundtrip in parallel,
+                                          returns the cheapest — same airline only
+                                          (mixed-carrier itineraries discarded).
 
   Performance:
     --workers N               Parallel search threads. Default: 4.
@@ -131,15 +134,35 @@ DEFAULT_TRIP_SCHEMES = [
     (3, 3, [4],    "18-23", "8-23"),   # Fri evening      → Mon
 ]
 
-# Known airline name mapping bugs in the fli library.
-# The Airline enum has an alias bug: codes with duplicate names silently collapse
-# into the first enum member with that value, returning a wrong name.
-# We correct the most common cases here. Flight numbers are always reliable.
-AIRLINE_NAME_FIXES = {
-    "LC Péru":               "Wizz Air Malta (W4)",   # W4 → alias of W6 in fli enum
-    "Peruvian Airlines":     "⚠️ P9 (verify on Google Flights)",
-    "Viva Airlines Peru":    "⚠️ VV (verify on Google Flights)",
-    "Eastern Airlines, LLC": "⚠️ 2D (verify on Google Flights)",
+# Airline name corrections for known fli library bugs.
+# Two types of bugs:
+#   1. Alias bug: Python enum collapses duplicate values, e.g. W9="Wizz Air" (alias of W6)
+#      so Airline['W9'].name → 'W6', losing the W9 identity.
+#   2. Wrong data: e.g. W4 is mapped to "LC Péru" but W4 is actually Wizz Air Malta.
+# The flight number is always reliable — we use it to show the corrected name.
+AIRLINE_NAME_FIXES: dict[str, str] = {
+    # Wrong data in fli source
+    "LC Péru":               "Wizz Air Malta",
+    "Peruvian Airlines":     "Peruvian Airlines ⚠️",   # P9 — may be correct, flag anyway
+    "Viva Airlines Peru":    "Viva Air Peru ⚠️",        # VV — verify
+    "Eastern Airlines, LLC": "Eastern Airlines ⚠️",     # 2D — verify
+    "Lufthansa Cargo":       "Lufthansa",               # LH in fli maps to cargo brand
+    "Alitalia":              "ITA Airways",             # Alitalia ceased 2021
+    # Alias bugs (wrong name due to Python enum deduplication)
+    "Thomas Cook Airlines":  "Thomas Cook Airlines",    # DK/MT — same, keep as-is
+    "Norse Atlantic Airways":"Norse Atlantic Airways",  # N0/Z0 — keep
+}
+
+# Corrections keyed by IATA code (overrides enum .value lookup)
+# Used when format_flight has the raw airline code from the leg
+AIRLINE_CODE_CORRECTIONS: dict[str, str] = {
+    "W4": "Wizz Air Malta",
+    "W9": "Wizz Air UK",
+    "LH": "Lufthansa",
+    "AZ": "ITA Airways",
+    "S0": "Somon Air",
+    "Z0": "Norse Atlantic UK",
+    "MT": "Thomas Cook Airlines Scandinavia",
 }
 
 # Curated IATA code → display name for --airlines and --exclude-airlines resolution
@@ -490,7 +513,20 @@ def print_result(r, mode, use_names=False):
     rt = r["ret"]
     has_warn = o["has_warning"] or (rt["has_warning"] if rt else False)
     warn_tag = "  ⚠️  CHECK AIRLINE NAME" if has_warn else ""
-    mode_tag = " [RT]" if mode == "roundtrip" else (" [OW]" if mode == "oneway" else "")
+    search_mode = r.get("search_mode", mode)
+    if mode == "oneway":
+        mode_tag = " [OW]"
+    elif mode == "bestprice":
+        tag_map = {
+            "roundtrip":      " [BP/RT]",
+            "combined":       " [BP/COMB]",
+            "combined_mixed": " [BP/COMB-MIX]",  # mixed airlines
+        }
+        mode_tag = tag_map.get(search_mode, " [BP]")
+    elif mode == "roundtrip":
+        mode_tag = " [RT]"
+    else:
+        mode_tag = ""
     price_str = f"€{r['total']:.0f}" if r["total"] is not None else "€?"
     label = "PRICE" if mode == "oneway" else "TOTAL"
     origin_str = ap(r['origin'], use_names)
@@ -614,6 +650,49 @@ def task_combined(origin, dest, dep_date, ret_date, out_w, ret_w, label,
     }
 
 
+def task_bestprice(origin, dest, dep_date, ret_date, out_w, ret_w, label,
+                   seat_type, max_eur, all_origins,
+                   airlines=None, exclude_airlines=None):
+    """
+    Run both combined and roundtrip searches in parallel, then return the
+    cheapest result.
+
+    Priority logic:
+    1. Both results available → pick the cheapest.
+    2. Same-airline combined cheaper than roundtrip → prefer it (tagged [BP/COMB]).
+    3. Mixed-airline combined is kept if it's cheaper and no same-airline option exists.
+    4. Only one result available → return it.
+    5. No results → None.
+
+    The "search_mode" key in the entry records which search won (roundtrip/combined)
+    and whether the combined result uses mixed airlines ("combined_mixed").
+    """
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        fut_rt   = pool.submit(task_roundtrip, origin, dest, dep_date, ret_date,
+                               out_w, ret_w, label, seat_type, max_eur,
+                               airlines, exclude_airlines)
+        fut_comb = pool.submit(task_combined, origin, dest, dep_date, ret_date,
+                               out_w, ret_w, label, seat_type, max_eur, all_origins,
+                               airlines, exclude_airlines)
+        rt_entry   = fut_rt.result()
+        comb_entry = fut_comb.result()
+
+    if comb_entry:
+        out_code = comb_entry["out"].get("airline_raw", "")
+        ret_code = comb_entry["ret"].get("airline_raw", "") if comb_entry["ret"] else ""
+        comb_entry["search_mode"] = "combined" if out_code == ret_code else "combined_mixed"
+
+    if rt_entry:
+        rt_entry["search_mode"] = "roundtrip"
+
+    candidates = [e for e in [rt_entry, comb_entry] if e is not None]
+    if not candidates:
+        return None
+
+    best = min(candidates, key=lambda e: e["total"] or float("inf"))
+    return best
+
+
 # ══════════════════════════════════════════════════════════════
 #  CLI
 # ══════════════════════════════════════════════════════════════
@@ -673,8 +752,10 @@ def parse_args():
     p.add_argument("--cabin", default=DEFAULT_CABIN, choices=list(CABIN_MAP.keys()),
                    help=f"Cabin class (default: {DEFAULT_CABIN})")
     p.add_argument("--mode", default=DEFAULT_MODE,
-                   choices=["combined", "roundtrip", "oneway"],
-                   help=f"Search mode (default: {DEFAULT_MODE})")
+                   choices=["combined", "roundtrip", "oneway", "bestprice"],
+                   help=f"Search mode (default: {DEFAULT_MODE}). "
+                        "bestprice = runs both combined and roundtrip, returns the "
+                        "cheapest — same airline only for outbound and return.")
     p.add_argument("--workers", type=int, default=DEFAULT_WORKERS,
                    help=f"Parallel search threads (default: {DEFAULT_WORKERS}). "
                         "Increase for speed, decrease if you hit rate limits.")
@@ -894,6 +975,7 @@ def main():
         "combined":  "Two separate one-ways (combined)",
         "roundtrip": "Native round-trip ticket",
         "oneway":    "One-way only",
+        "bestprice": "Best price (combined + roundtrip, same airline, cheapest wins)",
     }
 
     print(f"\n🔍  flisearch — {'one-way' if mode == 'oneway' else 'round-trip'} search")
@@ -940,6 +1022,10 @@ def main():
         elif mode == "roundtrip":
             return task_roundtrip(origin, dest, dep_date, ret_date, out_w, ret_w,
                                   label, seat_type, max_eur,
+                                  airlines=filter_airlines, exclude_airlines=exclude_airlines)
+        elif mode == "bestprice":
+            return task_bestprice(origin, dest, dep_date, ret_date, out_w, ret_w,
+                                  label, seat_type, max_eur, origins,
                                   airlines=filter_airlines, exclude_airlines=exclude_airlines)
         else:
             return task_combined(origin, dest, dep_date, ret_date, out_w, ret_w,

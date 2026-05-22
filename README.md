@@ -63,7 +63,7 @@ python flightsearch.py --help
 | `--max EUR` | Maximum total budget in EUR e.g. `--max 200`. If omitted, no cap is applied | — |
 | `--no-budget` | Explicitly disable budget cap (equivalent to omitting `--max`) | — |
 | `--cabin CLASS` | `economy` \| `premium_economy` \| `business` \| `first` | `economy` |
-| `--mode MODE` | `combined` \| `roundtrip` \| `oneway` (see below) | `combined` |
+| `--mode MODE` | `combined` \| `roundtrip` \| `oneway` \| `bestprice` (see below) | `combined` |
 | `--workers N` | Parallel search threads. Increase for speed, reduce if rate-limited | `4` |
 | `--output FILE` | CSV output filename | `results.csv` |
 | `--airport-names` | Show full airport names in results instead of IATA codes e.g. `Barcelona International Airport (BCN)` | off |
@@ -102,6 +102,7 @@ Alliance filtering is passed natively to the Google Flights API via the `fli` li
 | `combined` | Low-cost carriers (Ryanair, easyJet, Wizz Air). Searches outbound and return independently, then combines the cheapest pair. Supports different airports for outbound and return. |
 | `roundtrip` | Traditional carriers (Lufthansa, Air France, Turkish Airlines…). Fetches the native round-trip price from Google Flights, often cheaper than two one-ways. |
 | `oneway` | One-way only. `--nights` is ignored. Every day in the period is searched. |
+| `bestprice` | Runs **both** `combined` and `roundtrip` searches in parallel and returns the cheapest. Mixed-airline combined results are kept if they are cheaper and no same-airline option is available. Result tag: `[BP/RT]` (roundtrip won), `[BP/COMB]` (combined, same airline), `[BP/COMB-MIX]` (combined, mixed airlines). |
 
 ### Examples
 
@@ -126,6 +127,9 @@ python flightsearch.py --dest TBS --mode roundtrip --nights 5 7 --max 400
 # Business to Dubai, Friday evening departures, 4–6 nights
 python flightsearch.py --dest DXB --cabin business --mode roundtrip \
     --nights 4 6 --dep-days 4 --time-out 18-23
+
+# Best price (combined vs roundtrip, same airline, cheapest wins)
+python flightsearch.py --origins BGY MXP LIN --region europe --mode bestprice --max 80
 
 # Scan Africa and Middle East (asia includes Middle East)
 python flightsearch.py --region africa asia --mode roundtrip --no-budget
@@ -211,6 +215,20 @@ python flightsearch.py \
   --mode roundtrip \
   --alliance star
 ```
+
+#### Best price: economy flights from Milan to Europe, same airline, weekends, max €80
+
+```bash
+python flightsearch.py \
+  --origins BGY MXP LIN \
+  --region europe \
+  --from 2026-07-01 --to 2026-09-30 \
+  --mode bestprice \
+  --cabin economy \
+  --max 80
+```
+
+> `bestprice` searches both `combined` and `roundtrip` in parallel and picks the cheapest. Mixed-airline results (`[BP/COMB-MIX]`) are shown only if they are cheaper than the same-airline alternatives.
 
 #### Fixed dates trip: Milan → Hong Kong, depart 1 June, return 10 June, economy roundtrip
 
@@ -322,7 +340,7 @@ python flightsearch.py --help
 | `--max EUR` | Budget massimo totale A/R in euro es. `--max 200`. Se omesso, nessun limite viene applicato | — |
 | `--no-budget` | Disabilita esplicitamente il limite di budget (equivalente a omettere `--max`) | — |
 | `--cabin CLASSE` | `economy` \| `premium_economy` \| `business` \| `first` | `economy` |
-| `--mode MODALITA` | `combined` \| `roundtrip` \| `oneway` (vedi sotto) | `combined` |
+| `--mode MODALITA` | `combined` \| `roundtrip` \| `oneway` \| `bestprice` (vedi sotto) | `combined` |
 | `--workers N` | Thread di ricerca paralleli. Aumenta per velocità, riduci in caso di rate limit | `4` |
 | `--output FILE` | Nome file CSV output | `results.csv` |
 | `--airport-names` | Mostra i nomi estesi degli aeroporti nei risultati invece dei codici IATA es. `Barcelona International Airport (BCN)` | disattivo |
@@ -361,6 +379,7 @@ Il filtro per alleanza viene passato nativamente all'API di Google Flights trami
 | `combined` | Compagnie low cost (Ryanair, easyJet, Wizz Air). Cerca andata e ritorno come biglietti separati, poi combina la coppia più economica. Supporta aeroporti diversi per andata e ritorno. |
 | `roundtrip` | Compagnie tradizionali (Lufthansa, Air France, Turkish Airlines…). Recupera il prezzo A/R nativo da Google Flights, spesso più conveniente di due singoli biglietti. |
 | `oneway` | Solo andata. `--nights` viene ignorato. Viene eseguita una ricerca per ogni giorno del periodo. |
+| `bestprice` | Esegue **entrambe** le ricerche `combined` e `roundtrip` in parallelo e restituisce la più economica. I risultati combined con compagnie diverse vengono mantenuti se sono più economici e non esiste un'alternativa con la stessa compagnia. Tag nel risultato: `[BP/RT]` (ha vinto roundtrip), `[BP/COMB]` (combined, stessa compagnia), `[BP/COMB-MIX]` (combined, compagnie diverse). |
 
 ### Esempi
 
@@ -385,6 +404,9 @@ python flightsearch.py --dest TBS --mode roundtrip --nights 5 7 --max 400
 # Business verso Dubai, partenza venerdì sera, 4–6 notti
 python flightsearch.py --dest DXB --cabin business --mode roundtrip \
     --nights 4 6 --dep-days 4 --time-out 18-23
+
+# Best price (combined vs roundtrip, same airline, cheapest wins)
+python flightsearch.py --origins BGY MXP LIN --region europe --mode bestprice --max 80
 
 # Scan Africa and Middle East (asia includes Middle East)
 python flightsearch.py --region africa asia --mode roundtrip --no-budget
@@ -470,6 +492,20 @@ python flightsearch.py \
   --mode roundtrip \
   --alliance star
 ```
+
+#### Miglior prezzo: voli economy da Milano verso Europa, stessa compagnia, weekend, max €80
+
+```bash
+python flightsearch.py \
+  --origins BGY MXP LIN \
+  --region europe \
+  --from 2026-07-01 --to 2026-09-30 \
+  --mode bestprice \
+  --cabin economy \
+  --max 80
+```
+
+> `bestprice` esegue entrambe le ricerche `combined` e `roundtrip` in parallelo e sceglie la più economica. I risultati con compagnie diverse (`[BP/COMB-MIX]`) vengono mostrati solo se sono più economici delle alternative con la stessa compagnia.
 
 #### Date fisse: Milano → Hong Kong, partenza 1 giugno, ritorno 10 giugno, economy roundtrip
 
