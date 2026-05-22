@@ -1,6 +1,0 @@
-#!/Users/mastro/GitHub/flightsearch/venv/bin/python3
-import sys
-from fli.mcp._entry import run_http
-if __name__ == '__main__':
-    sys.argv[0] = sys.argv[0].removesuffix('.exe')
-    sys.exit(run_http())
