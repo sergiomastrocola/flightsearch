@@ -126,7 +126,7 @@ python flightsearch.py --help
 | `--airport-names` | Show full airport names instead of IATA codes e.g. `Barcelona International Airport (BCN)` | off |
 | `--calendar` | Calendar mode: show a price-per-day table for a fixed origin→dest pair. Requires `--dest` with a single destination | off |
 | `--no-cache` | Disable disk cache — always fetch fresh results | off |
-| `--config FILE` | Path to a TOML config file. If not specified, loads `flightsearch.toml` automatically if it exists in the current directory. CLI flags always override config values | auto |
+| `--config FILE` | Path to a TOML config file. If not specified, loads `flightsearch.toml` automatically if present. **CLI flags always take strict priority** — even when they match the built-in default | auto |
 
 ---
 
@@ -202,11 +202,15 @@ python flightsearch.py
 ```
 
 **Priority:** CLI flags > config file > built-in defaults.
-This means you can set base options in the config and override specific ones on the fly:
+
+This is a strict priority: even if you explicitly pass `--adults 1` on the CLI and the config says `adults = 3`, the CLI value wins. The config only fills in options that you did **not** pass on the command line.
 
 ```bash
-# Config sets economy + Europe, CLI overrides to business + Asia
+# Config sets economy + Europe; CLI overrides cabin and region
 python flightsearch.py --config base.toml --cabin business --region asia
+
+# Config sets adults=2; --adults 1 on CLI wins → result: adults=1
+python flightsearch.py --config family.toml --adults 1
 ```
 
 A template config file (`flightsearch.toml`) is included in the repo with all available options commented out. Copy it, rename it, and uncomment the options you need.
@@ -490,7 +494,7 @@ python flightsearch.py --help
 | `--airport-names` | Mostra i nomi estesi degli aeroporti invece dei codici IATA | off |
 | `--calendar` | Modalità calendario: tabella prezzi per giorno per una tratta fissa. Richiede `--dest` con una sola destinazione | off |
 | `--no-cache` | Disabilita la cache su disco — recupera sempre dati freschi | off |
-| `--config FILE` | Percorso a un file di configurazione TOML. Se non specificato, carica `flightsearch.toml` automaticamente se esiste nella directory corrente. I flag CLI hanno sempre priorità sui valori del config | auto |
+| `--config FILE` | Percorso a un file di configurazione TOML. Se non specificato, carica `flightsearch.toml` automaticamente se presente. **I flag CLI hanno sempre priorità assoluta** — anche quando coincidono con il default | auto |
 
 ---
 
@@ -560,11 +564,15 @@ python flightsearch.py
 ```
 
 **Priorità:** flag CLI > file di configurazione > default integrati.
-Puoi impostare le opzioni base nel config e sovrascriverne alcune al volo:
+
+La priorità è rigorosa: anche se passi esplicitamente `--adults 1` via CLI e il config dice `adults = 3`, vince il valore CLI. Il config riempie solo le opzioni che **non** hai passato sulla riga di comando.
 
 ```bash
-# Config imposta economy + Europa, CLI sovrascrive a business + Asia
+# Config imposta economy + Europa; CLI sovrascrive cabina e regione
 python flightsearch.py --config base.toml --cabin business --region asia
+
+# Config imposta adults=2; --adults 1 via CLI vince → risultato: adults=1
+python flightsearch.py --config famiglia.toml --adults 1
 ```
 
 Il file template (`flightsearch.toml`) è incluso nel repo con tutte le opzioni disponibili commentate. Copialo, rinominalo e decommenta le opzioni che ti servono.

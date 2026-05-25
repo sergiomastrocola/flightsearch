@@ -804,64 +804,69 @@ def load_config(path: str) -> dict:
         print(f"❌ Error reading config file: {e}")
         sys.exit(1)
 
-def merge_config_into_args(config: dict, args: argparse.Namespace) -> argparse.Namespace:
+def merge_config_into_args(config: dict, args: argparse.Namespace,
+                           cli_provided: set) -> argparse.Namespace:
     """
     Merge config file values into parsed args.
-    CLI arguments always take precedence over config file values.
-    Only sets a value from config if the current arg value is still the default (None or default).
+
+    cli_provided: set of argparse dest names that were explicitly passed on
+                  the command line. These always win over the config file,
+                  even if their value happens to equal the default.
+
+    Priority: CLI flag > config file > built-in default.
     """
-    # Map of config key → (argparse dest, is_list, default_value)
+    # Map: config_key → (argparse_dest, is_list)
     CONFIG_MAP = {
-        "origins":            ("origins",         True,  DEFAULT_ORIGINS),
-        "dest":               ("dest",            True,  None),
-        "region":             ("region",          True,  None),
-        "exclude":            ("exclude",         True,  None),
-        "from":               ("date_from",       False, DEFAULT_DATE_FROM),
-        "to":                 ("date_to",         False, DEFAULT_DATE_TO),
-        "nights":             ("nights",          True,  None),
-        "dep_days":           ("dep_days",        True,  None),
-        "time_out":           ("time_out",        False, None),
-        "time_ret":           ("time_ret",        False, None),
-        "max":                ("max",             False, None),
-        "no_budget":          ("no_budget",       False, False),
-        "min_price":          ("min_price",       False, None),
-        "adults":             ("adults",          False, 1),
-        "children":           ("children",        False, 0),
-        "infants_lap":        ("infants_lap",     False, 0),
-        "infants_seat":       ("infants_seat",    False, 0),
-        "bags_checked":       ("bags_checked",    False, 0),
-        "bags_carryon":       ("bags_carryon",    False, False),
-        "stops":              ("stops",           False, "any"),
-        "max_duration":       ("max_duration",    False, None),
-        "max_layover":        ("max_layover",     False, None),
-        "layover_airports":   ("layover_airports",True,  None),
-        "sort":               ("sort",            False, "cheapest"),
-        "cabin":              ("cabin",           False, DEFAULT_CABIN),
-        "mode":               ("mode",            False, DEFAULT_MODE),
-        "workers":            ("workers",         False, DEFAULT_WORKERS),
-        "output":             ("output",          False, "results.csv"),
-        "json":               ("json",            False, None),
-        "top":                ("top",             False, None),
-        "airport_names":      ("airport_names",   False, False),
-        "calendar":           ("calendar",        False, False),
-        "no_cache":           ("no_cache",        False, False),
-        "airlines":           ("airlines",        True,  None),
-        "exclude_airlines":   ("exclude_airlines",True,  None),
-        "alliance":           ("alliance",        False, None),
+        "origins":            ("origins",          True),
+        "dest":               ("dest",             True),
+        "region":             ("region",           True),
+        "exclude":            ("exclude",          True),
+        "from":               ("date_from",        False),
+        "to":                 ("date_to",          False),
+        "nights":             ("nights",           True),
+        "dep_days":           ("dep_days",         True),
+        "time_out":           ("time_out",         False),
+        "time_ret":           ("time_ret",         False),
+        "max":                ("max",              False),
+        "no_budget":          ("no_budget",        False),
+        "min_price":          ("min_price",        False),
+        "adults":             ("adults",           False),
+        "children":           ("children",         False),
+        "infants_lap":        ("infants_lap",      False),
+        "infants_seat":       ("infants_seat",     False),
+        "bags_checked":       ("bags_checked",     False),
+        "bags_carryon":       ("bags_carryon",     False),
+        "stops":              ("stops",            False),
+        "max_duration":       ("max_duration",     False),
+        "max_layover":        ("max_layover",      False),
+        "layover_airports":   ("layover_airports", True),
+        "sort":               ("sort",             False),
+        "cabin":              ("cabin",            False),
+        "mode":               ("mode",             False),
+        "workers":            ("workers",          False),
+        "output":             ("output",           False),
+        "json":               ("json",             False),
+        "top":                ("top",              False),
+        "airport_names":      ("airport_names",    False),
+        "calendar":           ("calendar",         False),
+        "no_cache":           ("no_cache",         False),
+        "airlines":           ("airlines",         True),
+        "exclude_airlines":   ("exclude_airlines", True),
+        "alliance":           ("alliance",         False),
     }
 
-    for cfg_key, (dest, is_list, default) in CONFIG_MAP.items():
+    for cfg_key, (dest, is_list) in CONFIG_MAP.items():
         if cfg_key not in config:
             continue
+        # CLI wins: skip if this dest was explicitly passed on the command line
+        if dest in cli_provided:
+            continue
         cfg_val = config[cfg_key]
-        current = getattr(args, dest, None)
-        # Only override if the current value is still the default
-        if current == default:
-            if is_list and not isinstance(cfg_val, list):
+        if is_list:
+            if not isinstance(cfg_val, list):
                 cfg_val = [cfg_val]
-            if is_list and isinstance(cfg_val, list):
-                cfg_val = [str(v) for v in cfg_val]
-            setattr(args, dest, cfg_val)
+            cfg_val = [str(v) for v in cfg_val]
+        setattr(args, dest, cfg_val)
     return args
 
 
@@ -927,7 +932,19 @@ def parse_args():
     p.add_argument("--config", default=None, metavar="FILE",
                    help=f"Path to a TOML config file (default: {DEFAULT_CONFIG_FILE} if it exists). "
                         "CLI flags always override config file values.")
-    return p.parse_args()
+    # Parse once to get args, then detect which flags were explicitly passed
+    args = p.parse_args()
+
+    # Build set of dest names that were actually provided on the CLI
+    # by parsing sys.argv against the parser's registered actions
+    cli_provided: set[str] = set()
+    cli_tokens = set(sys.argv[1:])
+    for action in p._actions:
+        if any(opt in cli_tokens for opt in action.option_strings):
+            cli_provided.add(action.dest)
+
+    args._cli_provided = cli_provided
+    return args
 
 def main():
     args = parse_args()
@@ -939,7 +956,7 @@ def main():
         config_path = DEFAULT_CONFIG_FILE
     if config_path:
         config = load_config(config_path)
-        args = merge_config_into_args(config, args)
+        args = merge_config_into_args(config, args, args._cli_provided)
         print(f"📋  Config loaded from: {config_path}")
 
     # ── Cache ─────────────────────────────────────────────────

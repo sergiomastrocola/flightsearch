@@ -1,5 +1,7 @@
 # flightsearch.toml — Configuration file template
-# All options are optional. CLI flags always override config file values.
+# All options are optional.
+# Priority: CLI flags > this config file > built-in defaults.
+# This is strict: --adults 1 on CLI always wins over adults = 3 in this file.
 # Copy this file, rename it (e.g. weekend_europe.toml), and customise.
 # Usage: python flightsearch.py --config weekend_europe.toml
 #
