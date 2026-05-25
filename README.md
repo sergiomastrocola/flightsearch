@@ -126,6 +126,7 @@ python flightsearch.py --help
 | `--airport-names` | Show full airport names instead of IATA codes e.g. `Barcelona International Airport (BCN)` | off |
 | `--calendar` | Calendar mode: show a price-per-day table for a fixed origin→dest pair. Requires `--dest` with a single destination | off |
 | `--no-cache` | Disable disk cache — always fetch fresh results | off |
+| `--config FILE` | Path to a TOML config file. If not specified, loads `flightsearch.toml` automatically if it exists in the current directory. CLI flags always override config values | auto |
 
 ---
 
@@ -186,6 +187,61 @@ With `--airport-names`:
 CSV columns: `Total (EUR)`, `Mode`, `Cabin`, `Passengers`, `Bags`, `Label`, `Dep Date`, `Ret Date`, `Origin`, `Destination`, `Return Airport`, `Airline Out`, `Flight Out`, `Dep Out`, `Arr Out`, `Price Out (EUR)`, `Duration Out`, `Airline Ret`, `Flight Ret`, `Dep Ret`, `Arr Ret`, `Price Ret (EUR)`, `Duration Ret`, `Stops Out`, `Stops Ret`, `Warning`.
 
 ---
+
+
+### Configuration File
+
+Instead of typing all options on the command line, you can put them in a TOML file:
+
+```bash
+# Use an explicit config file
+python flightsearch.py --config my_search.toml
+
+# Or just name it flightsearch.toml and it loads automatically
+python flightsearch.py
+```
+
+**Priority:** CLI flags > config file > built-in defaults.
+This means you can set base options in the config and override specific ones on the fly:
+
+```bash
+# Config sets economy + Europe, CLI overrides to business + Asia
+python flightsearch.py --config base.toml --cabin business --region asia
+```
+
+A template config file (`flightsearch.toml`) is included in the repo with all available options commented out. Copy it, rename it, and uncomment the options you need.
+
+**Example config for cheap Milan weekend trips:**
+```toml
+origins     = ["BGY", "MXP", "LIN"]
+region      = ["europe"]
+from        = "2026-07-01"
+to          = "2026-09-30"
+nights      = [2, 3]
+dep_days    = [3, 4]
+time_out    = "18-23"
+time_ret    = "8-23"
+cabin       = "economy"
+mode        = "combined"
+max         = 60
+workers     = 6
+output      = "weekends.csv"
+```
+
+**Example config for a fixed long-haul trip:**
+```toml
+origins      = ["MXP"]
+dest         = ["JFK"]
+from         = "2026-10-01"
+to           = "2026-10-10"
+cabin        = "business"
+mode         = "roundtrip"
+adults       = 2
+bags_checked = 1
+alliance     = "star"
+sort         = "duration"
+json         = "jfk_results.json"
+```
 
 ### Practical Examples
 
@@ -434,6 +490,7 @@ python flightsearch.py --help
 | `--airport-names` | Mostra i nomi estesi degli aeroporti invece dei codici IATA | off |
 | `--calendar` | Modalità calendario: tabella prezzi per giorno per una tratta fissa. Richiede `--dest` con una sola destinazione | off |
 | `--no-cache` | Disabilita la cache su disco — recupera sempre dati freschi | off |
+| `--config FILE` | Percorso a un file di configurazione TOML. Se non specificato, carica `flightsearch.toml` automaticamente se esiste nella directory corrente. I flag CLI hanno sempre priorità sui valori del config | auto |
 
 ---
 
@@ -488,6 +545,61 @@ Con `--airport-names`:
 ```
 
 ---
+
+
+### File di configurazione
+
+Invece di scrivere tutte le opzioni sulla riga di comando, puoi metterle in un file TOML:
+
+```bash
+# Usa un file di configurazione esplicito
+python flightsearch.py --config mia_ricerca.toml
+
+# Oppure nominalo flightsearch.toml e viene caricato automaticamente
+python flightsearch.py
+```
+
+**Priorità:** flag CLI > file di configurazione > default integrati.
+Puoi impostare le opzioni base nel config e sovrascriverne alcune al volo:
+
+```bash
+# Config imposta economy + Europa, CLI sovrascrive a business + Asia
+python flightsearch.py --config base.toml --cabin business --region asia
+```
+
+Il file template (`flightsearch.toml`) è incluso nel repo con tutte le opzioni disponibili commentate. Copialo, rinominalo e decommenta le opzioni che ti servono.
+
+**Esempio config per weekend economici da Milano:**
+```toml
+origins     = ["BGY", "MXP", "LIN"]
+region      = ["europe"]
+from        = "2026-07-01"
+to          = "2026-09-30"
+nights      = [2, 3]
+dep_days    = [3, 4]
+time_out    = "18-23"
+time_ret    = "8-23"
+cabin       = "economy"
+mode        = "combined"
+max         = 60
+workers     = 6
+output      = "weekend.csv"
+```
+
+**Esempio config per un viaggio intercontinentale:**
+```toml
+origins      = ["MXP"]
+dest         = ["JFK"]
+from         = "2026-10-01"
+to           = "2026-10-10"
+cabin        = "business"
+mode         = "roundtrip"
+adults       = 2
+bags_checked = 1
+alliance     = "star"
+sort         = "duration"
+json         = "jfk_risultati.json"
+```
 
 ### Esempi pratici
 

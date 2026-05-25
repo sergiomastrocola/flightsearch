@@ -118,8 +118,18 @@ import shelve
 import hashlib
 import argparse
 import threading
+import sys
+from pathlib import Path
 from datetime import date, timedelta, datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
+
+try:
+    import tomllib          # Python 3.11+
+except ImportError:
+    try:
+        import tomli as tomllib   # pip install tomli for 3.10
+    except ImportError:
+        tomllib = None
 from fli.models import (
     Airport, PassengerInfo, SeatType, MaxStops, SortBy, TripType,
     FlightSearchFilters, FlightSegment, TimeRestrictions, BagsFilter,
@@ -776,6 +786,85 @@ def build_date_pairs(date_from, date_to, nights_min, nights_max,
         d += timedelta(days=1)
     return pairs
 
+DEFAULT_CONFIG_FILE = "flightsearch.toml"
+
+def load_config(path: str) -> dict:
+    """Load a TOML config file and return its contents as a flat dict."""
+    if tomllib is None:
+        print("⚠️  TOML support not available. Install tomli: pip install tomli")
+        return {}
+    p = Path(path)
+    if not p.exists():
+        print(f"❌ Config file not found: {path}")
+        sys.exit(1)
+    try:
+        with open(p, "rb") as f:
+            return tomllib.load(f)
+    except Exception as e:
+        print(f"❌ Error reading config file: {e}")
+        sys.exit(1)
+
+def merge_config_into_args(config: dict, args: argparse.Namespace) -> argparse.Namespace:
+    """
+    Merge config file values into parsed args.
+    CLI arguments always take precedence over config file values.
+    Only sets a value from config if the current arg value is still the default (None or default).
+    """
+    # Map of config key → (argparse dest, is_list, default_value)
+    CONFIG_MAP = {
+        "origins":            ("origins",         True,  DEFAULT_ORIGINS),
+        "dest":               ("dest",            True,  None),
+        "region":             ("region",          True,  None),
+        "exclude":            ("exclude",         True,  None),
+        "from":               ("date_from",       False, DEFAULT_DATE_FROM),
+        "to":                 ("date_to",         False, DEFAULT_DATE_TO),
+        "nights":             ("nights",          True,  None),
+        "dep_days":           ("dep_days",        True,  None),
+        "time_out":           ("time_out",        False, None),
+        "time_ret":           ("time_ret",        False, None),
+        "max":                ("max",             False, None),
+        "no_budget":          ("no_budget",       False, False),
+        "min_price":          ("min_price",       False, None),
+        "adults":             ("adults",          False, 1),
+        "children":           ("children",        False, 0),
+        "infants_lap":        ("infants_lap",     False, 0),
+        "infants_seat":       ("infants_seat",    False, 0),
+        "bags_checked":       ("bags_checked",    False, 0),
+        "bags_carryon":       ("bags_carryon",    False, False),
+        "stops":              ("stops",           False, "any"),
+        "max_duration":       ("max_duration",    False, None),
+        "max_layover":        ("max_layover",     False, None),
+        "layover_airports":   ("layover_airports",True,  None),
+        "sort":               ("sort",            False, "cheapest"),
+        "cabin":              ("cabin",           False, DEFAULT_CABIN),
+        "mode":               ("mode",            False, DEFAULT_MODE),
+        "workers":            ("workers",         False, DEFAULT_WORKERS),
+        "output":             ("output",          False, "results.csv"),
+        "json":               ("json",            False, None),
+        "top":                ("top",             False, None),
+        "airport_names":      ("airport_names",   False, False),
+        "calendar":           ("calendar",        False, False),
+        "no_cache":           ("no_cache",        False, False),
+        "airlines":           ("airlines",        True,  None),
+        "exclude_airlines":   ("exclude_airlines",True,  None),
+        "alliance":           ("alliance",        False, None),
+    }
+
+    for cfg_key, (dest, is_list, default) in CONFIG_MAP.items():
+        if cfg_key not in config:
+            continue
+        cfg_val = config[cfg_key]
+        current = getattr(args, dest, None)
+        # Only override if the current value is still the default
+        if current == default:
+            if is_list and not isinstance(cfg_val, list):
+                cfg_val = [cfg_val]
+            if is_list and isinstance(cfg_val, list):
+                cfg_val = [str(v) for v in cfg_val]
+            setattr(args, dest, cfg_val)
+    return args
+
+
 def parse_args():
     p = argparse.ArgumentParser(
         description="flightsearch — Find cheap flights via Google Flights",
@@ -835,10 +924,23 @@ def parse_args():
     p.add_argument("--exclude-airlines", nargs="+", default=None, metavar="IATA",
                    dest="exclude_airlines")
     p.add_argument("--alliance", default=None, choices=["star", "oneworld", "skyteam"])
+    p.add_argument("--config", default=None, metavar="FILE",
+                   help=f"Path to a TOML config file (default: {DEFAULT_CONFIG_FILE} if it exists). "
+                        "CLI flags always override config file values.")
     return p.parse_args()
 
 def main():
     args = parse_args()
+
+    # ── Config file ───────────────────────────────────────────
+    # Load config file: explicit --config > default flightsearch.toml > nothing
+    config_path = args.config
+    if config_path is None and Path(DEFAULT_CONFIG_FILE).exists():
+        config_path = DEFAULT_CONFIG_FILE
+    if config_path:
+        config = load_config(config_path)
+        args = merge_config_into_args(config, args)
+        print(f"📋  Config loaded from: {config_path}")
 
     # ── Cache ─────────────────────────────────────────────────
     if not args.no_cache:

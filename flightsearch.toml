@@ -1,0 +1,134 @@
+# flightsearch.toml — Configuration file template
+# All options are optional. CLI flags always override config file values.
+# Copy this file, rename it (e.g. weekend_europe.toml), and customise.
+# Usage: python flightsearch.py --config weekend_europe.toml
+#
+# If this file is named exactly "flightsearch.toml" and placed in the
+# same directory as flightsearch.py, it is loaded automatically.
+
+# ── Airports & Destinations ──────────────────────────────────────────────────
+
+# Departure airport(s) — IATA codes
+origins = ["BGY", "MXP", "LIN"]
+
+# Specific destination(s) — overrides region if set
+# dest = ["BCN", "LIS"]
+
+# World region(s) to scan
+# Choices: europe, africa, north_america, south_america, asia, australia_pacific, world
+region = ["europe"]
+
+# Exclude destinations by airport IATA (3 letters) or country ISO code (2 letters)
+# exclude = ["ES", "FR", "BCN"]
+
+
+# ── Dates & Duration ─────────────────────────────────────────────────────────
+
+from = "2026-07-01"
+to   = "2026-09-30"
+
+# Min and max nights away (max 21)
+# If omitted in combined/roundtrip mode without dep_days: uses from/to as single pair
+nights = [2, 3]
+
+# Departure weekdays: 0=Mon 1=Tue 2=Wed 3=Thu 4=Fri 5=Sat 6=Sun
+dep_days = [3, 4]
+
+# Time window for outbound departure (HH-HH format)
+# time_out = "18-23"
+
+# Time window for return departure (HH-HH format)
+# time_ret = "8-23"
+
+
+# ── Budget ───────────────────────────────────────────────────────────────────
+
+# Maximum total budget in EUR — comment out for no cap
+# max = 60
+
+# Minimum price — filters out suspiciously cheap or erroneous results
+# min_price = 5
+
+
+# ── Passengers & Bags ────────────────────────────────────────────────────────
+
+adults      = 1
+children    = 0
+infants_lap = 0
+infants_seat = 0
+
+# Number of checked bags to include in displayed price
+# Makes low-cost vs traditional carrier comparisons fair
+bags_checked = 0
+
+# Include carry-on bag fee in displayed price
+bags_carryon = false
+
+
+# ── Flight Options ───────────────────────────────────────────────────────────
+
+# Maximum stops: "0" = non-stop, "1" = one stop, "2" = two or fewer, "any" = no limit
+stops = "any"
+
+# Maximum total flight duration in minutes
+# max_duration = 180
+
+# Maximum layover duration in minutes
+# max_layover = 120
+
+# Preferred layover airports
+# layover_airports = ["FRA", "AMS"]
+
+# Sort results by: cheapest, best, departure, arrival, duration, emissions
+sort = "cheapest"
+
+
+# ── Cabin & Mode ─────────────────────────────────────────────────────────────
+
+# Cabin class: economy, premium_economy, business, first
+cabin = "economy"
+
+# Search mode:
+#   combined  = two separate one-ways (best for low-cost carriers)
+#   roundtrip = native round-trip ticket (best for traditional carriers)
+#   oneway    = outbound only
+#   bestprice = runs both combined and roundtrip, returns the cheapest
+mode = "combined"
+
+
+# ── Airline Filters ──────────────────────────────────────────────────────────
+# Note: airlines, exclude_airlines, and alliance are mutually exclusive.
+
+# Only show results with these airlines (IATA codes)
+# airlines = ["FR", "U2", "VY"]
+
+# Exclude these airlines from results
+# exclude_airlines = ["FR"]
+
+# Filter by alliance: star, oneworld, skyteam
+# alliance = "star"
+
+
+# ── Performance & Output ─────────────────────────────────────────────────────
+
+# Number of parallel search threads
+workers = 4
+
+# CSV output filename (rows written in real time)
+output = "results.csv"
+
+# Also save results as JSON
+# json = "results.json"
+
+# Show only the N cheapest results in the final summary
+# top = 20
+
+# Show full airport names instead of IATA codes
+airport_names = false
+
+# Calendar mode: price-per-day table for a fixed origin→dest pair
+# Requires dest with a single destination
+calendar = false
+
+# Disable disk cache — always fetch fresh results
+no_cache = false
